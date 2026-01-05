@@ -1,218 +1,186 @@
 import streamlit as st
 from PIL import Image
 import io
-from streamlit_drawable_canvas import st_canvas
+import base64
 import fitz  # PyMuPDF
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import math
+import uuid
 
-# --- CONFIGURACIÓN DE LA PÁGINA ---
+# --- 1. EL PARCHE (Vital para que funcione en tu Streamlit actual) ---
+# Esto inyecta manualmente la función que falta para conectar la imagen con el editor
+import streamlit.elements.image as st_image
+
+def custom_image_to_url(image, width=None, clamp=False, channels="RGB", output_format="JPEG", image_id=None):
+    buffered = io.BytesIO()
+    # Guardamos como PNG para no perder calidad
+    image.save(buffered, format="PNG")
+    img_str = base64.b64encode(buffered.getvalue()).decode()
+    return f"data:image/png;base64,{img_str}"
+
+# Aplicamos el parche
+st_image.image_to_url = custom_image_to_url
+
+# Ahora sí importamos el canvas
+from streamlit_drawable_canvas import st_canvas
+
+
+# --- 2. CONFIGURACIÓN ---
 st.set_page_config(page_title="Sembrado Aromatex", layout="wide", page_icon="🌱")
-
-# --- ESTILOS CSS ---
 st.markdown("""
     <style>
     .block-container {padding-top: 1rem; padding-bottom: 1rem;}
-    h1 {color: #2E8B57;}
-    /* Borde para ver el límite del editor */
-    iframe {border: 1px solid #444;}
+    /* Borde blanco para resaltar el editor */
+    iframe {border: 2px solid #ffffff;} 
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🌱 Aromatex: Sembrado Inteligente")
+st.title("🌱 Aromatex: V24 (Fondo Blanco + Parche)")
 
-# --- GESTIÓN DE ESTADO (SESSION STATE) ---
-if 'scale_px_per_meter' not in st.session_state:
-    st.session_state['scale_px_per_meter'] = 35.0 
-if 'bg_image' not in st.session_state:
-    st.session_state['bg_image'] = None
-if 'original_file_name' not in st.session_state:
-    st.session_state['original_file_name'] = ""
+# --- 3. ESTADO ---
+if 'scale_px_per_meter' not in st.session_state: st.session_state['scale_px_per_meter'] = 35.0
+if 'bg_image' not in st.session_state: st.session_state['bg_image'] = None
+if 'canvas_key' not in st.session_state: st.session_state['canvas_key'] = str(uuid.uuid4())
+if 'last_file' not in st.session_state: st.session_state['last_file'] = ""
 
-# --- FUNCIONES AUXILIARES ---
-def load_image(uploaded_file):
-    # Solo procesamos si cambia el archivo
-    if uploaded_file.name != st.session_state['original_file_name']:
-        image = None
-        
-        # 1. Cargar PDF o Imagen
+# --- 4. FUNCIÓN DE LIMPIEZA DE IMAGEN ---
+def process_file(uploaded_file):
+    try:
+        # A) Leer PDF o Imagen
         if uploaded_file.type == "application/pdf":
             doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
             page = doc.load_page(0)
-            # Zoom 2.0 para buena calidad
-            mat = fitz.Matrix(2, 2)
-            pix = page.get_pixmap(matrix=mat, alpha=True)
-            img_data = pix.tobytes("png")
-            image = Image.open(io.BytesIO(img_data))
+            # Zoom 1.5x
+            pix = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=True)
+            image = Image.open(io.BytesIO(pix.tobytes("png")))
         else:
             image = Image.open(uploaded_file)
-        
-        # 2. --- CORRECCIÓN DE PANTALLA NEGRA ---
-        # Si la imagen tiene transparencia, poner fondo blanco
+
+        # B) CORRECCIÓN DE FONDO BLANCO (Lo que pediste)
+        # Si la imagen no es RGB puro (tiene transparencia), la pegamos sobre blanco.
         if image.mode != "RGB":
-            background = Image.new("RGB", image.size, (255, 255, 255))
-            if image.mode in ('RGBA', 'LA') or (image.mode == 'P' and 'transparency' in image.info):
-                background.paste(image, mask=image.convert("RGBA").split()[3])
+            background = Image.new("RGB", image.size, (255, 255, 255)) # Hoja blanca
+            if image.mode in ('RGBA', 'LA'):
+                # Usamos la transparencia original como máscara
+                background.paste(image, mask=image.split()[-1])
             else:
                 background.paste(image)
-            image = background
+            image = background # Ahora 'image' es el plano sobre blanco
         else:
+            # Aunque sea RGB, forzamos la conversión para limpiar metadatos
             image = image.convert("RGB")
-            
-        # 3. Redimensionar para evitar que el navegador se congele
-        base_width = 1000
-        w_percent = (base_width / float(image.size[0]))
-        h_size = int((float(image.size[1]) * float(w_percent)))
-        image = image.resize((base_width, h_size), Image.Resampling.LANCZOS)
-        
-        st.session_state['bg_image'] = image
-        st.session_state['original_file_name'] = uploaded_file.name
 
-# --- BARRA LATERAL ---
+        # C) Redimensionar (Seguridad para el navegador)
+        MAX_WIDTH = 1000
+        if image.width > MAX_WIDTH:
+            ratio = MAX_WIDTH / float(image.width)
+            h = int(float(image.height) * float(ratio))
+            image = image.resize((MAX_WIDTH, h), Image.Resampling.LANCZOS)
+            
+        return image
+
+    except Exception as e:
+        st.error(f"Error procesando el archivo: {e}")
+        return None
+
+# --- 5. BARRA LATERAL ---
 with st.sidebar:
-    st.image("https://cdn-icons-png.flaticon.com/512/2933/2933190.png", width=50)
-    st.header("1. Configuración")
-    
-    tipo_equipo = st.selectbox("Modelo de Difusor", 
-        ["Home Pro (100 m²)", "Advance Pro (300 m²)", "Extreme (800 m²)"])
+    st.header("Configuración")
+    tipo_equipo = st.selectbox("Modelo", ["Home Pro (100 m²)", "Advance Pro (300 m²)", "Extreme (800 m²)"])
     
     if "Home" in tipo_equipo:
+        color = "#2E8B57"
         radio_real = 5.6
-        color_hex = "#2E8B57" # Verde
     elif "Advance" in tipo_equipo:
+        color = "#FF8C00"
         radio_real = 9.7
-        color_hex = "#FF8C00" # Naranja
     else:
+        color = "#DC143C"
         radio_real = 16.0
-        color_hex = "#DC143C" # Rojo
-
-    canvas_fill_color = color_hex + "44"  
-
-    st.divider()
-    modo = st.radio("Modo de trabajo:", ["📏 Calibrar Escala", "📍 Sembrar Equipos"], index=1)
-    
-    st.divider()
-    
-    # Input manual para corregir escala si es necesario
-    nuevo_scale = st.number_input("Escala (Px/m):", value=float(st.session_state['scale_px_per_meter']), step=0.1)
-    if nuevo_scale != st.session_state['scale_px_per_meter']:
-        st.session_state['scale_px_per_meter'] = nuevo_scale
-        st.rerun()
-
-    radio_px_pantalla = int(radio_real * st.session_state['scale_px_per_meter'])
-    st.caption(f"Radio: {radio_real}m ({radio_px_pantalla} px)")
-
-    if st.button("🗑️ Limpiar Todo"):
-        st.session_state['bg_image'] = None
-        st.session_state['original_file_name'] = ""
-        st.rerun()
-
-# --- ÁREA PRINCIPAL ---
-archivo = st.file_uploader("Sube el plano arquitectónico (PDF, JPG, PNG)", type=["pdf", "jpg", "png"])
-
-if archivo:
-    load_image(archivo)
-    
-    if st.session_state['bg_image']:
-        img = st.session_state['bg_image']
         
-        # --- MODO CALIBRACIÓN ---
-        if modo == "📏 Calibrar Escala":
-            st.info("💡 Dibuja una línea sobre una medida conocida (ej. puerta) y escribe su longitud real.")
-            
-            canvas_calib = st_canvas(
-                fill_color="rgba(0, 0, 0, 0)",
-                stroke_width=3,
-                stroke_color="#0000FF",
-                background_image=img,
-                update_streamlit=True,
-                height=img.height,
-                width=img.width,
-                drawing_mode="line",
-                display_toolbar=True, # Barra de zoom activada
-                key="canvas_calib"
-            )
-            
-            if canvas_calib.json_data is not None:
-                objects = canvas_calib.json_data["objects"]
-                if len(objects) > 0:
-                    last_obj = objects[-1]
-                    # Cálculo seguro de distancia
-                    dx = last_obj["width"] * last_obj["scaleX"]
-                    dy = last_obj["height"] * last_obj["scaleY"]
-                    dist_px = math.sqrt(dx**2 + dy**2)
-                    
-                    col1, col2 = st.columns([2,1])
-                    with col1:
-                        st.write(f"Longitud dibujada: **{dist_px:.1f} píxeles**")
-                    with col2:
-                        metros_reales = st.number_input("Metros reales:", value=1.0, min_value=0.1, step=0.5)
-                    
-                    if st.button("✅ Aplicar Calibración"):
-                        nueva_escala = dist_px / metros_reales
-                        st.session_state['scale_px_per_meter'] = nueva_escala
-                        st.success(f"Escala calibrada a {nueva_escala:.2f} px/m")
+    st.divider()
+    modo = st.radio("Modo:", ["📏 Calibrar Escala", "📍 Sembrar Equipos"])
+    
+    scale = st.number_input("Escala (Px/m):", value=float(st.session_state['scale_px_per_meter']), step=0.1)
+    if scale != st.session_state['scale_px_per_meter']:
+        st.session_state['scale_px_per_meter'] = scale
+        st.rerun()
+        
+    radio_px = int(radio_real * st.session_state['scale_px_per_meter'])
+    st.caption(f"Radio visual: {radio_px} px")
+
+    if st.button("🗑️ Reiniciar"):
+        st.session_state['bg_image'] = None
+        st.session_state['last_file'] = ""
+        st.session_state['canvas_key'] = str(uuid.uuid4())
+        st.rerun()
+
+# --- 6. APP PRINCIPAL ---
+uploaded_file = st.file_uploader("Sube plano (PDF, JPG, PNG)", type=["pdf", "jpg", "png"])
+
+if uploaded_file:
+    # Detectar cambio de archivo
+    file_id = f"{uploaded_file.name}-{uploaded_file.size}"
+    if st.session_state['last_file'] != file_id:
+        st.session_state['bg_image'] = process_file(uploaded_file)
+        st.session_state['last_file'] = file_id
+        st.session_state['canvas_key'] = str(uuid.uuid4()) # Resetear canvas
+        st.rerun()
+
+if st.session_state['bg_image']:
+    img_pil = st.session_state['bg_image']
+    
+    st.write("### Editor de Sembrado")
+    st.caption("Si ves el fondo blanco con tu plano, ¡ya funciona!")
+    
+    # EL CANVAS
+    # background_color="#FFFFFF" asegura que el hueco sea blanco, 
+    # y 'background_image' pone tu plano encima.
+    canvas_result = st_canvas(
+        fill_color=color + "55",
+        stroke_width=2,
+        stroke_color=color,
+        background_color="#FFFFFF", # Fondo de seguridad blanco
+        background_image=img_pil,   # Tu plano procesado
+        update_streamlit=True,
+        height=img_pil.height,
+        width=img_pil.width,
+        drawing_mode="point" if modo == "📍 Sembrar Equipos" else "line",
+        point_display_radius=radio_px,
+        display_toolbar=True,
+        key=st.session_state['canvas_key']
+    )
+    
+    # LÓGICA
+    if canvas_result.json_data and "objects" in canvas_result.json_data:
+        objects = canvas_result.json_data["objects"]
+        if len(objects) > 0:
+            if modo == "📏 Calibrar Escala":
+                try:
+                    obj = objects[-1]
+                    dist = math.sqrt((obj["width"]*obj["scaleX"])**2 + (obj["height"]*obj["scaleY"])**2)
+                    st.info(f"Distancia: {dist:.1f} px")
+                    m = st.number_input("Metros reales:", 1.0)
+                    if st.button("Guardar Escala"):
+                        st.session_state['scale_px_per_meter'] = dist / m
                         st.rerun()
-
-        # --- MODO SEMBRADO ---
-        elif modo == "📍 Sembrar Equipos":
-            st.success(f"Colocando: **{tipo_equipo}**")
+                except: pass
             
-            # Usamos una key dinámica para que el canvas se actualice si cambia el equipo o la escala
-            key_canvas = f"sembrado_{tipo_equipo}_{st.session_state['scale_px_per_meter']}"
-            
-            canvas_sembrado = st_canvas(
-                fill_color=canvas_fill_color,
-                stroke_width=2,
-                stroke_color=color_hex,
-                background_image=img,
-                update_streamlit=True,
-                height=img.height,
-                width=img.width,
-                drawing_mode="point",
-                point_display_radius=radio_px_pantalla, 
-                display_toolbar=True, # Barra de zoom activada
-                key=key_canvas
-            )
-            
-            if canvas_sembrado.json_data is not None:
-                objects = canvas_sembrado.json_data["objects"]
-                
-                if len(objects) > 0:
-                    st.write("### Vista Previa")
-                    
-                    # Generar imagen final
-                    fig, ax = plt.subplots(figsize=(12, 12 * img.height / img.width))
-                    ax.imshow(img)
-                    ax.axis('off')
-
-                    conteo = 0
-                    for obj in objects:
-                        conteo += 1
-                        x, y = obj["left"], obj["top"]
-                        
-                        circ = patches.Circle((x, y), radio_px_pantalla, 
-                                            linewidth=2, 
-                                            edgecolor=color_hex, 
-                                            facecolor=color_hex,
-                                            alpha=0.3)
-                        ax.add_patch(circ)
-                        
-                        center = patches.Circle((x, y), 5, color="white")
-                        ax.add_patch(center)
-
-                    st.markdown(f"**Equipos sembrados:** {conteo}")
-
+            elif modo == "📍 Sembrar Equipos":
+                st.metric("Total", len(objects))
+                if st.button("Generar Imagen"):
                     buf = io.BytesIO()
-                    plt.savefig(buf, format="png", bbox_inches='tight', pad_inches=0, dpi=150)
-                    
-                    st.download_button(
-                        label="📥 Descargar Propuesta (PNG)",
-                        data=buf.getvalue(),
-                        file_name=f"Propuesta_Aromatex_{tipo_equipo}.png",
-                        mime="image/png"
-                    )
+                    # Matplotlib también necesita saber que el fondo es blanco
+                    fig, ax = plt.subplots(figsize=(10, 10 * img_pil.height / img_pil.width))
+                    ax.imshow(img_pil)
+                    ax.axis('off')
+                    for o in objects:
+                        c = patches.Circle((o["left"], o["top"]), radio_px, color=color, alpha=0.3)
+                        ax.add_patch(c)
+                        ax.add_patch(patches.Circle((o["left"], o["top"]), 5, color="white"))
+                    plt.savefig(buf, format="png", bbox_inches='tight', pad_inches=0)
+                    st.download_button("Descargar PNG", buf.getvalue(), "propuesta.png", "image/png")
 
 else:
-    st.info("👆 Sube un plano para comenzar.")
+    st.info("👆 Sube tu plano para comenzar.")
