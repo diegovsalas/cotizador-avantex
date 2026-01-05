@@ -1,45 +1,50 @@
 import streamlit as st
-from PIL import Image
+from PIL import Image, ImageOps
 import io
-import numpy as np
+import numpy as np # Usaremos arreglos para mayor estabilidad
 from streamlit_drawable_canvas import st_canvas
 import fitz  # PyMuPDF
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import uuid
-import math  # <--- IMPORTANTE: Esto arregla el NameError
+import math # Importante para evitar NameError
 
-# --- CONFIGURACIÓN ---
+# --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="Sembrado Aromatex", layout="wide")
-st.markdown("<style>.block-container {padding-top: 1rem;}</style>", unsafe_allow_html=True)
+# Forzar estilos para que el canvas tenga borde visible
+st.markdown("""
+    <style>
+    .block-container {padding-top: 1rem;}
+    iframe {border: 1px solid #444;}
+    </style>
+    """, unsafe_allow_html=True)
 
-st.title("🌱 Aromatex: V11 (Versión Estable)")
+st.title("🌱 Aromatex: V12 (Corrección de Fondo)")
 
-# --- ESTADO (SESSION STATE) ---
+# --- GESTIÓN DE ESTADO ---
 if 'bg_image' not in st.session_state: st.session_state['bg_image'] = None
 if 'img_id' not in st.session_state: st.session_state['img_id'] = str(uuid.uuid4())
 if 'scale_px_per_meter' not in st.session_state: st.session_state['scale_px_per_meter'] = 35.0
 
-# --- PROCESAMIENTO DE ARCHIVO ---
+# --- PROCESAMIENTO ---
 def process_file(uploaded_file):
     try:
-        # Resetear lectura del archivo
         uploaded_file.seek(0)
         file_bytes = uploaded_file.read()
         
         image = None
         
-        # 1. Convertir PDF o abrir Imagen
+        # 1. Leer PDF o Imagen
         if uploaded_file.type == "application/pdf":
             doc = fitz.open(stream=file_bytes, filetype="pdf")
             page = doc.load_page(0)
-            # Zoom 1.5x (Balance calidad/rendimiento)
+            # Zoom 1.5 es seguro y rápido
             pix = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False)
             image = Image.open(io.BytesIO(pix.tobytes("png")))
         else:
             image = Image.open(io.BytesIO(file_bytes))
             
-        # 2. Forzar RGB (Eliminar transparencias problemáticas)
+        # 2. Normalizar a RGB (Fondo Blanco "quemado")
         if image.mode != "RGB":
             bg = Image.new("RGB", image.size, (255, 255, 255))
             if image.mode in ('RGBA', 'LA') or (image.mode == 'P' and 'transparency' in image.info):
@@ -50,21 +55,21 @@ def process_file(uploaded_file):
         else:
             image = image.convert("RGB")
 
-        # 3. Redimensionar para el Editor (Max 1000px ancho)
-        # Esto asegura que el Canvas no se congele por exceso de tamaño
-        MAX_WIDTH = 1000 
+        # 3. Redimensionar (Max 800px para máxima compatibilidad)
+        # Un ancho menor asegura que el navegador no bloquee la imagen
+        MAX_WIDTH = 800 
         if image.width > MAX_WIDTH:
             w_percent = (MAX_WIDTH / float(image.width))
             h_size = int((float(image.height) * float(w_percent)))
             image = image.resize((MAX_WIDTH, h_size), Image.Resampling.LANCZOS)
 
         st.session_state['bg_image'] = image
-        st.session_state['img_id'] = str(uuid.uuid4()) # Forzar nueva ID para recargar canvas
+        st.session_state['img_id'] = str(uuid.uuid4())
         
     except Exception as e:
-        st.error(f"Error al procesar imagen: {e}")
+        st.error(f"Error procesando: {e}")
 
-# --- BARRA LATERAL (CONTROLES) ---
+# --- SIDEBAR ---
 with st.sidebar:
     st.header("Configuración")
     
@@ -81,28 +86,27 @@ with st.sidebar:
         color_hex = "#DC143C"
         
     st.divider()
-    modo = st.radio("Herramienta", ["📏 Calibrar", "📍 Sembrar"])
+    modo = st.radio("Herramienta", ["📏 Calibrar Escala", "📍 Sembrar Equipos"])
     
     st.divider()
-    # Input manual de escala
-    val_escala = st.number_input("Escala (Px por metro):", value=float(st.session_state['scale_px_per_meter']), step=0.1)
-    if val_escala != st.session_state['scale_px_per_meter']:
-        st.session_state['scale_px_per_meter'] = val_escala
+    nuevo_scale = st.number_input("Escala (Px/m):", value=float(st.session_state['scale_px_per_meter']), step=0.1)
+    if nuevo_scale != st.session_state['scale_px_per_meter']:
+        st.session_state['scale_px_per_meter'] = nuevo_scale
         st.rerun()
 
     radio_px = int(radio_real * st.session_state['scale_px_per_meter'])
     st.caption(f"Radio visual: {radio_px} px")
-
-    if st.button("🗑️ Resetear Todo"):
+    
+    if st.button("🗑️ Reiniciar"):
         st.session_state['bg_image'] = None
         st.session_state['last_file'] = None
         st.rerun()
 
-# --- APP PRINCIPAL ---
-uploaded_file = st.file_uploader("Sube plano (PDF, JPG, PNG)", type=["pdf", "png", "jpg"])
+# --- APP ---
+uploaded_file = st.file_uploader("Sube plano (PDF, PNG, JPG)", type=["pdf", "png", "jpg"])
 
 if uploaded_file:
-    # Detectar si cambió el archivo
+    # Detectar cambio de archivo
     file_key = f"{uploaded_file.name}_{uploaded_file.size}"
     if 'last_file' not in st.session_state or st.session_state['last_file'] != file_key:
         process_file(uploaded_file)
@@ -112,79 +116,69 @@ if uploaded_file:
     if st.session_state['bg_image']:
         img_pil = st.session_state['bg_image']
         
-        # 1. Vista Previa (Testigo)
-        with st.expander("👁️ Ver imagen original cargada", expanded=False):
-            st.image(np.array(img_pil), use_column_width=True)
-            
-        st.write("### ✏️ Editor de Plano")
+        # 1. PRUEBA DE FUEGO: Mostrar imagen normal
+        st.write("### 1. Vista Previa (Imagen Estática)")
+        st.image(np.array(img_pil), caption="Si ves esto, la imagen cargó bien en Python.", use_column_width=True)
         
-        # 2. Editor Canvas
-        # Background color blanco forzado para evitar invisibilidad
+        st.write("---")
+        st.write("### 2. Editor Interactivo")
+        
+        # 2. EL CANVAS
+        # background_color="#FFFFFF" asegura que si la imagen falla, veas un cuadro blanco y no negro.
         canvas_result = st_canvas(
             fill_color=color_hex + "44",
             stroke_width=2,
             stroke_color=color_hex,
-            background_color="#FFFFFF", # Fondo blanco detrás de la imagen
+            background_color="#FFFFFF", 
             background_image=img_pil,
             update_streamlit=True,
             height=img_pil.height,
             width=img_pil.width,
-            drawing_mode="point" if modo == "📍 Sembrar" else "line",
+            drawing_mode="point" if modo == "📍 Sembrar Equipos" else "line",
             point_display_radius=radio_px,
             display_toolbar=True,
             key=f"canvas_{st.session_state['img_id']}"
         )
         
-        # 3. Lógica de Datos (Protegida contra errores)
+        # 3. Lógica (Protegida)
         if canvas_result.json_data and "objects" in canvas_result.json_data:
             objects = canvas_result.json_data["objects"]
             
             if len(objects) > 0:
-                # --- MODO CALIBRAR ---
-                if modo == "📏 Calibrar":
-                    obj = objects[-1]
+                if modo == "📏 Calibrar Escala":
                     try:
+                        obj = objects[-1]
                         # Cálculo protegido
-                        # Obtenemos ancho y alto escalados
-                        w = obj.get("width", 0) * obj.get("scaleX", 1)
-                        h = obj.get("height", 0) * obj.get("scaleY", 1)
-                        # Hipotenusa
+                        scale_x = obj.get("scaleX", 1)
+                        scale_y = obj.get("scaleY", 1)
+                        w = obj.get("width", 0) * scale_x
+                        h = obj.get("height", 0) * scale_y
+                        
                         dist_px = math.sqrt(w**2 + h**2)
+                        st.info(f"📏 Distancia: {dist_px:.1f} px")
                         
-                        st.info(f"📏 Distancia detectada: {dist_px:.1f} píxeles")
-                        
-                        real_m = st.number_input("Metros reales:", value=1.0, min_value=0.1)
+                        metros = st.number_input("Metros reales:", value=1.0)
                         if st.button("Guardar Escala"):
-                            st.session_state['scale_px_per_meter'] = dist_px / real_m
-                            st.success("Escala Guardada!")
+                            st.session_state['scale_px_per_meter'] = dist_px / metros
+                            st.success("Guardado!")
                             st.rerun()
-                            
                     except Exception as e:
-                        st.warning("Dibuja una línea recta clara para calibrar.")
+                        st.warning("Dibuja una línea clara.")
 
-                # --- MODO SEMBRAR ---
-                elif modo == "📍 Sembrar":
-                    count = len(objects)
-                    st.metric("Difusores colocados", count)
+                elif modo == "📍 Sembrar Equipos":
+                    st.metric("Equipos", len(objects))
                     
-                    # Botón para descargar resultado
-                    if st.button("Generar Imagen Final"):
+                    if st.button("📸 Generar Imagen Final"):
                         buf = io.BytesIO()
-                        # Crear figura limpia
                         fig, ax = plt.subplots(figsize=(10, 10 * img_pil.height / img_pil.width))
                         ax.imshow(img_pil)
                         ax.axis('off')
-                        
-                        # Redibujar puntos
                         for o in objects:
                             x, y = o["left"], o["top"]
-                            # Círculo cobertura
                             ax.add_patch(patches.Circle((x, y), radio_px, color=color_hex, alpha=0.3))
-                            # Punto centro
                             ax.add_patch(patches.Circle((x, y), 5, color="white"))
-                            
                         plt.savefig(buf, format="png", bbox_inches='tight', pad_inches=0)
                         buf.seek(0)
-                        st.download_button("📥 Descargar", buf, "propuesta.png", "image/png")
+                        st.download_button("Descargar", buf, "propuesta.png", "image/png")
     else:
-        st.info("Procesando imagen...")
+        st.info("Sube un archivo para empezar.")
