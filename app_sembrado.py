@@ -1,66 +1,74 @@
 import streamlit as st
 from PIL import Image
 import io
-from streamlit_drawable_canvas import st_canvas
+import base64
 import fitz  # PyMuPDF
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import math
 import uuid
 
-# --- 1. DIAGNÓSTICO DE VERSIÓN ---
-st.set_page_config(page_title="Sembrado Aromatex", layout="wide", page_icon="🌱")
+# --- 1. PARCHE DE COMPATIBILIDAD (CRÍTICO) ---
+# Esto hace que el editor funcione aunque tengas una versión nueva de Streamlit
+import streamlit.elements.image as st_image
 
-# Verificamos qué versión está corriendo el servidor
-ver = st.__version__
-if ver != "1.34.0":
-    st.error(f"⚠️ VERSIÓN INCOMPATIBLE DETECTADA: {ver}")
-    st.warning("Para que el editor funcione, necesitas 'streamlit==1.34.0' en tu requirements.txt y REINICIAR la app.")
-else:
-    st.success(f"✅ Versión correcta detectada: {ver}. El editor debería funcionar.")
+def custom_image_to_url(image, width=None, clamp=False, channels="RGB", output_format="JPEG", image_id=None):
+    buffered = io.BytesIO()
+    image.save(buffered, format="PNG")
+    img_str = base64.b64encode(buffered.getvalue()).decode()
+    return f"data:image/png;base64,{img_str}"
 
-# --- 2. ESTILOS Y ESTADO ---
+st_image.image_to_url = custom_image_to_url
+# ---------------------------------------------
+
+from streamlit_drawable_canvas import st_canvas
+
+# --- CONFIGURACIÓN ---
+st.set_page_config(page_title="Sembrado Aromatex", layout="wide")
 st.markdown("""
     <style>
     .block-container {padding-top: 1rem;}
-    /* Borde blanco para resaltar el editor en modo oscuro */
+    /* Borde blanco grueso para asegurar que ves el área del editor */
     iframe {border: 2px solid #ffffff;} 
     </style>
     """, unsafe_allow_html=True)
 
+st.title("🌱 Aromatex: V26 (Fondo Blanco Forzado)")
+
+# --- ESTADO ---
 if 'scale_px_per_meter' not in st.session_state: st.session_state['scale_px_per_meter'] = 35.0
 if 'bg_image' not in st.session_state: st.session_state['bg_image'] = None
 if 'canvas_key' not in st.session_state: st.session_state['canvas_key'] = str(uuid.uuid4())
-if 'last_file_id' not in st.session_state: st.session_state['last_file_id'] = ""
+if 'last_file' not in st.session_state: st.session_state['last_file'] = ""
 
-# --- 3. PROCESAMIENTO ROBUSTO ---
+# --- PROCESAMIENTO ---
 def process_file(uploaded_file):
     try:
-        # A) Cargar PDF o Imagen
         image = None
         uploaded_file.seek(0)
-        file_bytes = uploaded_file.read()
-
+        
+        # A) PDF a Imagen
         if uploaded_file.type == "application/pdf":
-            doc = fitz.open(stream=file_bytes, filetype="pdf")
+            doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
             page = doc.load_page(0)
-            # Zoom 1.5x (Calidad óptima)
+            # Alpha=True para capturar transparencias
             pix = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=True)
             image = Image.open(io.BytesIO(pix.tobytes("png")))
         else:
-            image = Image.open(io.BytesIO(file_bytes))
+            image = Image.open(uploaded_file)
 
-        # B) CORRECCIÓN DE FONDO BLANCO (Vital para planos negros/transparentes)
-        # Convertimos siempre a RGBA para manejar capas
+        # B) EL "APLANADOR" (SOLUCIÓN A PANTALLA NEGRA)
+        # 1. Convertimos a RGBA para manejar capas
         image = image.convert("RGBA")
-        # Creamos lienzo blanco
-        new_bg = Image.new("RGBA", image.size, "WHITE")
-        # Pegamos el plano encima
-        new_bg.alpha_composite(image)
-        # Convertimos a RGB final
-        final_image = new_bg.convert("RGB")
+        # 2. Creamos una hoja totalmente BLANCA del mismo tamaño
+        background = Image.new("RGBA", image.size, (255, 255, 255, 255))
+        # 3. Pegamos el plano encima (usando la transparencia como máscara)
+        # Esto rellena lo transparente con blanco
+        final_image = Image.alpha_composite(background, image)
+        # 4. Convertimos a RGB simple (eliminamos el canal transparente)
+        final_image = final_image.convert("RGB")
 
-        # C) Redimensionar (Evita bloqueos del navegador)
+        # C) Redimensionar (Para que no se congele el navegador)
         MAX_WIDTH = 1000
         if final_image.width > MAX_WIDTH:
             ratio = MAX_WIDTH / float(final_image.width)
@@ -70,10 +78,10 @@ def process_file(uploaded_file):
         return final_image
 
     except Exception as e:
-        st.error(f"Error procesando archivo: {e}")
+        st.error(f"Error: {e}")
         return None
 
-# --- 4. BARRA LATERAL ---
+# --- SIDEBAR ---
 with st.sidebar:
     st.header("Configuración")
     tipo_equipo = st.selectbox("Modelo", ["Home Pro (100 m²)", "Advance Pro (300 m²)", "Extreme (800 m²)"])
@@ -95,40 +103,39 @@ with st.sidebar:
     if scale != st.session_state['scale_px_per_meter']:
         st.session_state['scale_px_per_meter'] = scale
         st.rerun()
-        
+    
     radio_px = int(radio_real * st.session_state['scale_px_per_meter'])
     st.caption(f"Radio visual: {radio_px} px")
 
     if st.button("🗑️ Reiniciar"):
         st.session_state['bg_image'] = None
-        st.session_state['last_file_id'] = ""
+        st.session_state['last_file'] = ""
         st.session_state['canvas_key'] = str(uuid.uuid4())
         st.rerun()
 
-# --- 5. APP PRINCIPAL ---
-st.title("🌱 Sembrado Aromatex")
-
+# --- APP ---
 uploaded_file = st.file_uploader("Sube plano (PDF, JPG, PNG)", type=["pdf", "jpg", "png"])
 
 if uploaded_file:
-    # Detectar cambio de archivo
     file_id = f"{uploaded_file.name}-{uploaded_file.size}"
-    if st.session_state['last_file_id'] != file_id:
+    if st.session_state['last_file'] != file_id:
         st.session_state['bg_image'] = process_file(uploaded_file)
-        st.session_state['last_file_id'] = file_id
+        st.session_state['last_file'] = file_id
         st.session_state['canvas_key'] = str(uuid.uuid4())
         st.rerun()
 
 if st.session_state['bg_image']:
     img_pil = st.session_state['bg_image']
     
-    # 1. Editor de Sembrado
     st.write("### Editor Interactivo")
     
+    # EL CANVAS
+    # Usamos background_color="#FFFFFF" como doble seguridad
     canvas_result = st_canvas(
         fill_color=color + "55",
         stroke_width=2,
         stroke_color=color,
+        background_color="#FFFFFF",
         background_image=img_pil,
         update_streamlit=True,
         height=img_pil.height,
@@ -139,12 +146,9 @@ if st.session_state['bg_image']:
         key=st.session_state['canvas_key']
     )
     
-    # 2. Lógica de Resultados
     if canvas_result.json_data and "objects" in canvas_result.json_data:
         objects = canvas_result.json_data["objects"]
         if len(objects) > 0:
-            
-            # CALIBRACIÓN
             if modo == "📏 Calibrar Escala":
                 try:
                     obj = objects[-1]
@@ -156,13 +160,10 @@ if st.session_state['bg_image']:
                         st.rerun()
                 except: pass
             
-            # SEMBRADO
             elif modo == "📍 Sembrar Equipos":
                 st.metric("Total Equipos", len(objects))
-                
                 if st.button("Generar Imagen"):
                     buf = io.BytesIO()
-                    # Usamos matplotlib para asegurar calidad final
                     fig, ax = plt.subplots(figsize=(10, 10 * img_pil.height / img_pil.width))
                     ax.imshow(img_pil)
                     ax.axis('off')
@@ -174,4 +175,4 @@ if st.session_state['bg_image']:
                     st.download_button("Descargar PNG", buf.getvalue(), "propuesta.png", "image/png")
 
 else:
-    st.info("👆 Sube tu plano para comenzar.")
+    st.info("Sube un archivo para empezar.")
