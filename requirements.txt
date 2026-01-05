@@ -1,6 +1,5 @@
-streamlit==1.35.0
-streamlit-drawable-canvas==0.9.3
+streamlit
+streamlit-drawable-canvas
 pymupdf
 matplotlib
 Pillow
-numpy
