@@ -15,7 +15,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🌱 Aromatex: Sembrado Inteligente con Gemini")
+st.title("🌱 Aromatex: Sembrado con Gemini 2.0")
 
 # --- ESTADO ---
 if 'puntos' not in st.session_state: st.session_state['puntos'] = []
@@ -39,7 +39,7 @@ def process_file(uploaded_file):
         else:
             image = Image.open(uploaded_file)
 
-        # APLANAR A BLANCO
+        # APLANAR A BLANCO (Vital)
         image = image.convert("RGBA")
         background = Image.new("RGBA", image.size, (255, 255, 255, 255))
         image = Image.alpha_composite(background, image).convert("RGB")
@@ -99,41 +99,29 @@ with st.sidebar:
     
     api_key = st.text_input("Google API Key:", type="password")
     
-    # BOTÓN DE DIAGNÓSTICO
-    if api_key:
-        if st.expander("🔍 Ver modelos disponibles (Debug)"):
-            try:
-                genai.configure(api_key=api_key)
-                st.write("Tu API Key tiene acceso a:")
-                for m in genai.list_models():
-                    if 'generateContent' in m.supported_generation_methods:
-                        st.code(m.name)
-            except Exception as e:
-                st.error(f"Error de llave: {e}")
-
-    if st.button("✨ Analizar Plano con Gemini"):
+    if st.button("✨ Analizar Plano (Gemini 2.0)"):
         if not api_key:
             st.error("⚠️ Falta la API Key")
         elif not st.session_state['base_image']:
             st.warning("⚠️ Primero sube un plano")
         else:
             try:
-                with st.spinner("Conectando con Google Gemini..."):
+                with st.spinner("Gemini 2.0 está analizando tu plano..."):
                     genai.configure(api_key=api_key)
                     
-                    # INTENTO 1: Modelo Flash Latest (Suele funcionar)
-                    nombre_modelo = 'gemini-1.5-flash-latest'
-                    
-                    # Configuración básica
-                    model = genai.GenerativeModel(nombre_modelo)
+                    # --- AQUÍ ESTÁ EL CAMBIO ---
+                    # Usamos uno de los modelos que confirmaste que tienes en tu lista
+                    model = genai.GenerativeModel('gemini-2.0-flash')
                     
                     prompt = """
                     Actúa como un experto consultor en Marketing Olfativo para la empresa Aromatex.
-                    Analiza este plano arquitectónico adjunto.
-                    1. Identificar el tipo de inmueble.
-                    2. Detectar las zonas principales (Recepción, Sala, Baños).
-                    3. Recomendar estratégicamente DÓNDE colocar los difusores.
-                    Responde en español, formato lista.
+                    Analiza este plano arquitectónico adjunto visualmente.
+                    
+                    1. CLASIFICACIÓN: ¿Qué tipo de inmueble es? (Oficina, Retail, Casa, etc.)
+                    2. ZONAS CALIENTES: Identifica las 3 zonas de mayor flujo de personas o permanencia.
+                    3. ESTRATEGIA: Recomienda puntualmente dónde colocar los difusores de aroma para cubrir esas zonas sin desperdiciar aroma en pasillos muertos.
+                    
+                    Responde en español, sé directo y profesional.
                     """
                     
                     response = model.generate_content([prompt, st.session_state['base_image']])
@@ -141,8 +129,7 @@ with st.sidebar:
                     st.rerun()
                     
             except Exception as e:
-                st.error(f"Error con el modelo '{nombre_modelo}': {e}")
-                st.info("💡 Consejo: Abre la sección '🔍 Ver modelos disponibles' arriba y busca un nombre que empiece con 'models/gemini...'.")
+                st.error(f"Error: {e}")
 
 # --- APP PRINCIPAL ---
 uploaded_file = st.file_uploader("Sube plano (PDF, JPG)", type=["pdf", "jpg", "png"])
@@ -160,8 +147,8 @@ if st.session_state['base_image']:
     
     # 1. RESULTADO IA
     if st.session_state['analisis_ia']:
-        st.success("✅ Análisis de IA Completado")
-        with st.expander("📄 Ver Reporte de Gemini", expanded=True):
+        st.success("✅ Análisis Completo")
+        with st.expander("📄 Ver Recomendación de Estrategia", expanded=True):
             st.markdown(st.session_state['analisis_ia'])
         st.divider()
 
