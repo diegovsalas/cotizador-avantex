@@ -18,7 +18,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🌱 Aromatex: Sembrado V3 (Fondo Blanco)")
+st.title("🌱 Aromatex: Sembrado V5 (Anti-Transparencia)")
 
 # --- GESTIÓN DE ESTADO (SESSION STATE) ---
 if 'scale_px_per_meter' not in st.session_state:
@@ -28,33 +28,59 @@ if 'bg_image' not in st.session_state:
 if 'original_file_name' not in st.session_state:
     st.session_state['original_file_name'] = ""
 
-# --- FUNCIONES AUXILIARES ---
+# --- FUNCIONES AUXILIARES (LÓGICA BLINDADA) ---
 def load_image(uploaded_file):
+    # Solo procesar si es un archivo nuevo
     if uploaded_file.name != st.session_state['original_file_name']:
+        image = None
+        
         if uploaded_file.type == "application/pdf":
+            # 1. Abrir PDF con PyMuPDF
             doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
             page = doc.load_page(0)
             
-            # Aumentamos Matrix a 3.0 para alta definición
-            mat = fitz.Matrix(3, 3)
+            # 2. Renderizar con alta calidad (Zoom 2.5x es buen balance calidad/velocidad)
+            # alpha=True captura la transparencia original del CAD
+            mat = fitz.Matrix(2.5, 2.5)
+            pix = page.get_pixmap(matrix=mat, alpha=True) 
             
-            # --- CORRECCIÓN CRÍTICA ---
-            # alpha=False fuerza un fondo blanco, arreglando la pantalla negra en modo oscuro
-            pix = page.get_pixmap(matrix=mat, alpha=False)
-            
+            # 3. Convertir a imagen PIL
             img_data = pix.tobytes("png")
-            image = Image.open(io.BytesIO(img_data))
+            pdf_image = Image.open(io.BytesIO(img_data))
+            
+            # 4. --- EL TRUCO DEL FONDO BLANCO ---
+            # Crear un lienzo blanco puro del mismo tamaño
+            background = Image.new("RGB", pdf_image.size, (255, 255, 255))
+            
+            # Pegar el plano encima. 
+            # Si tiene canal Alpha (transparencia), lo usamos como máscara.
+            if pdf_image.mode == 'RGBA':
+                background.paste(pdf_image, mask=pdf_image.split()[3])
+            else:
+                background.paste(pdf_image)
+            
+            image = background
+            
         else:
+            # Si suben un JPG/PNG normal
             image = Image.open(uploaded_file)
+            # Asegurar que también tenga fondo blanco por si es un PNG transparente
+            if image.mode in ('RGBA', 'LA'):
+                background = Image.new("RGB", image.size, (255, 255, 255))
+                background.paste(image, mask=image.split()[-1])
+                image = background
+            else:
+                image = image.convert("RGB")
         
-        # Ajuste de tamaño base (ancho 1200px para buena visibilidad)
-        base_width = 1200
-        w_percent = (base_width / float(image.size[0]))
-        h_size = int((float(image.size[1]) * float(w_percent)))
-        image = image.resize((base_width, h_size), Image.Resampling.LANCZOS)
-        
-        st.session_state['bg_image'] = image
-        st.session_state['original_file_name'] = uploaded_file.name
+        # 5. Redimensionar para visualización web (Ancho 1200px estandar)
+        if image:
+            base_width = 1200
+            w_percent = (base_width / float(image.size[0]))
+            h_size = int((float(image.size[1]) * float(w_percent)))
+            image = image.resize((base_width, h_size), Image.Resampling.LANCZOS)
+            
+            st.session_state['bg_image'] = image
+            st.session_state['original_file_name'] = uploaded_file.name
 
 # --- BARRA LATERAL ---
 with st.sidebar:
@@ -86,8 +112,7 @@ with st.sidebar:
         "Píxeles por metro:", 
         value=float(st.session_state['scale_px_per_meter']),
         step=0.1,
-        format="%.2f",
-        help="Si conoces la escala exacta, escríbela aquí."
+        format="%.2f"
     )
     
     if escala_manual != st.session_state['scale_px_per_meter']:
@@ -106,14 +131,17 @@ with st.sidebar:
 archivo = st.file_uploader("Sube el plano arquitectónico (PDF, JPG, PNG)", type=["pdf", "jpg", "png"])
 
 if archivo:
-    load_image(archivo)
+    try:
+        load_image(archivo)
+    except Exception as e:
+        st.error(f"Error al procesar el archivo: {e}")
     
     if st.session_state['bg_image']:
         img = st.session_state['bg_image']
         
         # --- MODO CALIBRACIÓN ---
         if modo == "📏 Calibrar Escala":
-            st.warning("MODO CALIBRACIÓN: Dibuja una línea de referencia.")
+            st.warning("MODO CALIBRACIÓN: Dibuja una línea de referencia (Ej. puerta o cota).")
             
             canvas_calib = st_canvas(
                 fill_color="rgba(0, 0, 0, 0)",
@@ -124,7 +152,7 @@ if archivo:
                 height=img.height,
                 width=img.width,
                 drawing_mode="line",
-                display_toolbar=True, # Herramientas de zoom/pan
+                display_toolbar=True,
                 key="canvas_calib"
             )
             
@@ -132,7 +160,7 @@ if archivo:
                 objects = canvas_calib.json_data["objects"]
                 if len(objects) > 0:
                     last_obj = objects[-1]
-                    # Cálculo de hipotenusa considerando escala del objeto
+                    # Pitágoras para obtener distancia visual
                     width_obj = last_obj["width"] * last_obj["scaleX"]
                     height_obj = last_obj["height"] * last_obj["scaleY"]
                     dist_px = math.sqrt(width_obj**2 + height_obj**2)
@@ -141,10 +169,11 @@ if archivo:
                     metros_reales = st.number_input("¿Cuántos metros son en la realidad?", value=1.0)
                     
                     if st.button("✅ Guardar Calibración"):
-                        nueva_escala = dist_px / metros_reales
-                        st.session_state['scale_px_per_meter'] = nueva_escala
-                        st.success(f"Escala guardada: {nueva_escala:.2f} px/m")
-                        st.rerun()
+                        if metros_reales > 0:
+                            nueva_escala = dist_px / metros_reales
+                            st.session_state['scale_px_per_meter'] = nueva_escala
+                            st.success(f"Escala guardada: {nueva_escala:.2f} px/m")
+                            st.rerun()
 
         # --- MODO SEMBRADO ---
         elif modo == "📍 Sembrar Equipos":
@@ -160,7 +189,7 @@ if archivo:
                 width=img.width,
                 drawing_mode="point",
                 point_display_radius=radio_px_pantalla, 
-                display_toolbar=True, # Herramientas de zoom/pan
+                display_toolbar=True,
                 key=f"canvas_sembrado_{tipo_equipo}_{st.session_state['scale_px_per_meter']}"
             )
             
@@ -170,7 +199,7 @@ if archivo:
                 if len(objects) > 0:
                     st.write("### 🖼️ Vista Previa y Descarga")
                     
-                    # Generar imagen HD con matplotlib
+                    # Generar imagen HD para descarga
                     fig, ax = plt.subplots(figsize=(12, 12 * img.height / img.width))
                     ax.imshow(img)
                     ax.axis('off')
@@ -179,10 +208,10 @@ if archivo:
                     for obj in objects:
                         conteo += 1
                         x, y = obj["left"], obj["top"]
-                        # Círculo de cobertura
+                        # Círculo área
                         circ = patches.Circle((x, y), radio_px_pantalla, linewidth=2, edgecolor=color_hex, facecolor=color_hex, alpha=0.3)
                         ax.add_patch(circ)
-                        # Punto central
+                        # Punto centro
                         center = patches.Circle((x, y), 5, color="white")
                         ax.add_patch(center)
 
