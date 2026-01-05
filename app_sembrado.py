@@ -18,7 +18,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🌱 Aromatex: Sembrado Inteligente")
+st.title("🌱 Aromatex: Sembrado V3 (Fondo Blanco)")
 
 # --- GESTIÓN DE ESTADO (SESSION STATE) ---
 if 'scale_px_per_meter' not in st.session_state:
@@ -34,9 +34,14 @@ def load_image(uploaded_file):
         if uploaded_file.type == "application/pdf":
             doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
             page = doc.load_page(0)
-            # Aumentamos Matrix a 3.0 para mejor resolución al hacer zoom
+            
+            # Aumentamos Matrix a 3.0 para alta definición
             mat = fitz.Matrix(3, 3)
-            pix = page.get_pixmap(matrix=mat)
+            
+            # --- CORRECCIÓN CRÍTICA ---
+            # alpha=False fuerza un fondo blanco, arreglando la pantalla negra en modo oscuro
+            pix = page.get_pixmap(matrix=mat, alpha=False)
+            
             img_data = pix.tobytes("png")
             image = Image.open(io.BytesIO(img_data))
         else:
@@ -59,37 +64,32 @@ with st.sidebar:
     tipo_equipo = st.selectbox("Modelo de Difusor", 
         ["Home Pro (100 m²)", "Advance Pro (300 m²)", "Extreme (800 m²)"])
     
-    # Definición de radios y colores
     if "Home" in tipo_equipo:
         radio_real = 5.6
-        color_hex = "#2E8B57" # Verde SeaGreen
+        color_hex = "#2E8B57" # Verde
     elif "Advance" in tipo_equipo:
         radio_real = 9.7
-        color_hex = "#FF8C00" # Naranja DarkOrange
+        color_hex = "#FF8C00" # Naranja
     else:
         radio_real = 16.0
-        color_hex = "#DC143C" # Rojo Crimson
+        color_hex = "#DC143C" # Rojo
 
-    # Color de relleno con transparencia
     canvas_fill_color = color_hex + "44"  
 
     st.divider()
     modo = st.radio("Modo de trabajo:", ["📏 Calibrar Escala", "📍 Sembrar Equipos"], index=1)
     
     st.divider()
-    st.subheader("⚙️ Ajuste de Escala")
+    st.subheader("⚙️ Ajuste Manual de Escala")
     
-    # OPCIÓN DE ESCALA MANUAL
-    # Permite al usuario editar el valor numérico directamente
     escala_manual = st.number_input(
-        "Píxeles por metro (Manual):", 
+        "Píxeles por metro:", 
         value=float(st.session_state['scale_px_per_meter']),
         step=0.1,
         format="%.2f",
-        help="Edita este valor manualmente si conoces la escala exacta."
+        help="Si conoces la escala exacta, escríbela aquí."
     )
     
-    # Si el usuario cambia el input manual, actualizamos el estado
     if escala_manual != st.session_state['scale_px_per_meter']:
         st.session_state['scale_px_per_meter'] = escala_manual
         st.rerun()
@@ -113,9 +113,8 @@ if archivo:
         
         # --- MODO CALIBRACIÓN ---
         if modo == "📏 Calibrar Escala":
-            st.info("💡 Dibuja una línea sobre una medida conocida (ej. puerta) y escribe su longitud real abajo.")
+            st.warning("MODO CALIBRACIÓN: Dibuja una línea de referencia.")
             
-            # Canvas con toolbar activado para zoom
             canvas_calib = st_canvas(
                 fill_color="rgba(0, 0, 0, 0)",
                 stroke_width=3,
@@ -125,7 +124,7 @@ if archivo:
                 height=img.height,
                 width=img.width,
                 drawing_mode="line",
-                display_toolbar=True,  # <--- ACTIVAR ZOOM Y PAN
+                display_toolbar=True, # Herramientas de zoom/pan
                 key="canvas_calib"
             )
             
@@ -133,22 +132,15 @@ if archivo:
                 objects = canvas_calib.json_data["objects"]
                 if len(objects) > 0:
                     last_obj = objects[-1]
-                    # Calcular distancia en píxeles considerando transformaciones
-                    x1, y1 = last_obj["left"], last_obj["top"]
-                    # Ajuste: st_canvas devuelve scaleX/scaleY si el usuario estiró la linea, 
-                    # pero en modo 'line' simple suele ser width/height proyectado.
-                    # Calculamos hipotenusa simple basada en coordenadas del bounding box para simplificar:
+                    # Cálculo de hipotenusa considerando escala del objeto
                     width_obj = last_obj["width"] * last_obj["scaleX"]
                     height_obj = last_obj["height"] * last_obj["scaleY"]
                     dist_px = math.sqrt(width_obj**2 + height_obj**2)
                     
-                    col1, col2 = st.columns([2,1])
-                    with col1:
-                        st.write(f"Longitud dibujada: **{dist_px:.1f} píxeles**")
-                    with col2:
-                        metros_reales = st.number_input("Metros reales:", value=1.0, min_value=0.1, step=0.5)
+                    st.write(f"📏 Distancia trazada: **{dist_px:.1f} px**")
+                    metros_reales = st.number_input("¿Cuántos metros son en la realidad?", value=1.0)
                     
-                    if st.button("✅ Aplicar Calibración"):
+                    if st.button("✅ Guardar Calibración"):
                         nueva_escala = dist_px / metros_reales
                         st.session_state['scale_px_per_meter'] = nueva_escala
                         st.success(f"Escala guardada: {nueva_escala:.2f} px/m")
@@ -156,8 +148,7 @@ if archivo:
 
         # --- MODO SEMBRADO ---
         elif modo == "📍 Sembrar Equipos":
-            st.success(f"Colocando: **{tipo_equipo}** (Haz clic en el plano)")
-            st.caption("Usa las herramientas de la izquierda del plano para hacer Zoom 🔍 y Mover ✋")
+            st.success(f"MODO SEMBRADO: Haz clic para colocar **{tipo_equipo}**")
             
             canvas_sembrado = st_canvas(
                 fill_color=canvas_fill_color,
@@ -169,7 +160,7 @@ if archivo:
                 width=img.width,
                 drawing_mode="point",
                 point_display_radius=radio_px_pantalla, 
-                display_toolbar=True, # <--- ACTIVAR ZOOM Y PAN
+                display_toolbar=True, # Herramientas de zoom/pan
                 key=f"canvas_sembrado_{tipo_equipo}_{st.session_state['scale_px_per_meter']}"
             )
             
@@ -177,9 +168,9 @@ if archivo:
                 objects = canvas_sembrado.json_data["objects"]
                 
                 if len(objects) > 0:
-                    st.write("### Vista Previa")
+                    st.write("### 🖼️ Vista Previa y Descarga")
                     
-                    # Generar imagen final para descarga (Alta resolución)
+                    # Generar imagen HD con matplotlib
                     fig, ax = plt.subplots(figsize=(12, 12 * img.height / img.width))
                     ax.imshow(img)
                     ax.axis('off')
@@ -188,27 +179,21 @@ if archivo:
                     for obj in objects:
                         conteo += 1
                         x, y = obj["left"], obj["top"]
-                        
-                        # Dibujar círculo de cobertura
-                        circ = patches.Circle((x, y), radio_px_pantalla, 
-                                            linewidth=2, 
-                                            edgecolor=color_hex, 
-                                            facecolor=color_hex,
-                                            alpha=0.3)
+                        # Círculo de cobertura
+                        circ = patches.Circle((x, y), radio_px_pantalla, linewidth=2, edgecolor=color_hex, facecolor=color_hex, alpha=0.3)
                         ax.add_patch(circ)
-                        
-                        # Dibujar punto central
+                        # Punto central
                         center = patches.Circle((x, y), 5, color="white")
                         ax.add_patch(center)
 
-                    st.markdown(f"**Equipos sembrados:** {conteo}")
+                    st.markdown(f"**Equipos colocados:** {conteo}")
 
                     buf = io.BytesIO()
                     plt.savefig(buf, format="png", bbox_inches='tight', pad_inches=0, dpi=150)
                     buf.seek(0)
                     
                     st.download_button(
-                        label="📥 Descargar Propuesta (PNG)",
+                        label="📥 Descargar Imagen Final",
                         data=buf,
                         file_name=f"Propuesta_Aromatex_{tipo_equipo}.png",
                         mime="image/png"
