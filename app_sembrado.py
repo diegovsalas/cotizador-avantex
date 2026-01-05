@@ -4,9 +4,7 @@ import io
 import fitz  # PyMuPDF
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
-import google.generativeai as genai # <--- LIBRERÍA DE GEMINI
-
-# Importamos la librería de coordenadas (Plan B - Estable)
+import google.generativeai as genai 
 from streamlit_image_coordinates import streamlit_image_coordinates
 
 # --- CONFIGURACIÓN ---
@@ -26,29 +24,27 @@ if 'base_image' not in st.session_state: st.session_state['base_image'] = None
 if 'file_id' not in st.session_state: st.session_state['file_id'] = ""
 if 'analisis_ia' not in st.session_state: st.session_state['analisis_ia'] = ""
 
-# --- PROCESAMIENTO (EL APLANADOR DE IMAGEN) ---
+# --- PROCESAMIENTO ---
 def process_file(uploaded_file):
     try:
         image = None
         uploaded_file.seek(0)
         
-        # 1. Convertir PDF a Imagen
+        # PDF a Imagen
         if uploaded_file.type == "application/pdf":
             doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
             page = doc.load_page(0)
-            # Zoom 1.5x para buena resolución
             pix = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=True)
             image = Image.open(io.BytesIO(pix.tobytes("png")))
         else:
             image = Image.open(uploaded_file)
 
-        # 2. FORZAR FONDO BLANCO (Crucial para ver el plano)
-        # Esto elimina la transparencia que causaba la pantalla negra
+        # APLANAR A BLANCO
         image = image.convert("RGBA")
         background = Image.new("RGBA", image.size, (255, 255, 255, 255))
         image = Image.alpha_composite(background, image).convert("RGB")
 
-        # 3. Redimensionar (Para fluidez)
+        # Redimensionar
         MAX_WIDTH = 1000
         if image.width > MAX_WIDTH:
             ratio = MAX_WIDTH / float(image.width)
@@ -66,13 +62,13 @@ with st.sidebar:
     tipo = st.selectbox("Modelo", ["Home Pro (100 m²)", "Advance Pro (300 m²)", "Extreme (800 m²)"])
     
     if "Home" in tipo:
-        color = "#2E8B57" # Verde
+        color = "#2E8B57"
         radio_real = 5.6
     elif "Advance" in tipo:
-        color = "#FF8C00" # Naranja
+        color = "#FF8C00"
         radio_real = 9.7
     else:
-        color = "#DC143C" # Rojo
+        color = "#DC143C"
         radio_real = 16.0
         
     radio_px = int(radio_real * st.session_state['scale_px_per_meter'])
@@ -80,7 +76,6 @@ with st.sidebar:
     
     st.divider()
     
-    # Controles de Puntos
     col1, col2 = st.columns(2)
     if col1.button("↩️ Deshacer"):
         if st.session_state['puntos']:
@@ -98,14 +93,24 @@ with st.sidebar:
         st.session_state['scale_px_per_meter'] = scale
         st.rerun()
 
-    # --- SECCIÓN INTELIGENCIA ARTIFICIAL (GEMINI) ---
+    # --- SECCIÓN INTELIGENCIA ARTIFICIAL ---
     st.divider()
     st.header("🧠 Consultor IA")
-    st.info("Pega aquí tu clave que empieza con AIza...")
     
-    # Input para la API Key
     api_key = st.text_input("Google API Key:", type="password")
     
+    # BOTÓN DE DIAGNÓSTICO
+    if api_key:
+        if st.expander("🔍 Ver modelos disponibles (Debug)"):
+            try:
+                genai.configure(api_key=api_key)
+                st.write("Tu API Key tiene acceso a:")
+                for m in genai.list_models():
+                    if 'generateContent' in m.supported_generation_methods:
+                        st.code(m.name)
+            except Exception as e:
+                st.error(f"Error de llave: {e}")
+
     if st.button("✨ Analizar Plano con Gemini"):
         if not api_key:
             st.error("⚠️ Falta la API Key")
@@ -113,36 +118,31 @@ with st.sidebar:
             st.warning("⚠️ Primero sube un plano")
         else:
             try:
-                with st.spinner("La IA está leyendo el plano..."):
-                    # 1. Configurar Gemini
+                with st.spinner("Conectando con Google Gemini..."):
                     genai.configure(api_key=api_key)
                     
-                    # 2. Elegimos el modelo Flash (Rápido y bueno con imágenes)
-                    model = genai.GenerativeModel('gemini-1.5-flash')
+                    # INTENTO 1: Modelo Flash Latest (Suele funcionar)
+                    nombre_modelo = 'gemini-1.5-flash-latest'
                     
-                    # 3. El Prompt Experto en Aromatex
+                    # Configuración básica
+                    model = genai.GenerativeModel(nombre_modelo)
+                    
                     prompt = """
                     Actúa como un experto consultor en Marketing Olfativo para la empresa Aromatex.
                     Analiza este plano arquitectónico adjunto.
-                    
-                    Tu tarea es:
-                    1. Identificar el tipo de inmueble (Oficina, Casa, Tienda, etc).
+                    1. Identificar el tipo de inmueble.
                     2. Detectar las zonas principales (Recepción, Sala, Baños).
-                    3. Recomendar estratégicamente DÓNDE colocar los difusores de aroma para maximizar la experiencia del cliente.
-                    4. Mencionar si hay obstáculos visibles (muros, divisiones).
-                    
-                    Responde en español, formato lista, tono profesional.
+                    3. Recomendar estratégicamente DÓNDE colocar los difusores.
+                    Responde en español, formato lista.
                     """
                     
-                    # 4. Enviar Imagen + Prompt
                     response = model.generate_content([prompt, st.session_state['base_image']])
-                    
-                    # 5. Guardar resultado
                     st.session_state['analisis_ia'] = response.text
                     st.rerun()
                     
             except Exception as e:
-                st.error(f"Error conectando con Gemini: {e}")
+                st.error(f"Error con el modelo '{nombre_modelo}': {e}")
+                st.info("💡 Consejo: Abre la sección '🔍 Ver modelos disponibles' arriba y busca un nombre que empiece con 'models/gemini...'.")
 
 # --- APP PRINCIPAL ---
 uploaded_file = st.file_uploader("Sube plano (PDF, JPG)", type=["pdf", "jpg", "png"])
@@ -158,66 +158,54 @@ if uploaded_file:
 
 if st.session_state['base_image']:
     
-    # 1. MOSTRAR ANÁLISIS DE IA SI EXISTE
+    # 1. RESULTADO IA
     if st.session_state['analisis_ia']:
         st.success("✅ Análisis de IA Completado")
         with st.expander("📄 Ver Reporte de Gemini", expanded=True):
             st.markdown(st.session_state['analisis_ia'])
         st.divider()
 
-    # 2. PREPARAR IMAGEN PARA VISUALIZAR
-    # Hacemos una copia para dibujar los puntos encima
+    # 2. VISUALIZADOR
     display_img = st.session_state['base_image'].copy()
     draw = ImageDraw.Draw(display_img, "RGBA")
     
-    # PINTAR PUNTOS EXISTENTES
     for p in st.session_state['puntos']:
         x, y = p['x'], p['y']
         r = p['radio']
-        # Círculo de cobertura
         draw.ellipse((x-r, y-r, x+r, y+r), outline=p['color'], width=3)
-        # Punto central
         draw.ellipse((x-5, y-5, x+5, y+5), fill="white", outline="black")
 
     st.write("### 📍 Haz clic en el mapa para colocar equipos")
     
-    # 3. COMPONENTE DE CLIC (ESTO REEMPLAZA AL CANVAS NEGRO)
     value = streamlit_image_coordinates(
         display_img,
         key="sembrado_click"
     )
     
-    # Detectar nuevo clic
     if value is not None:
         new_point = {"x": value["x"], "y": value["y"], "color": color, "radio": radio_px}
-        # Evitar duplicados por refresco de página
         if not st.session_state['puntos'] or st.session_state['puntos'][-1]['x'] != new_point['x']:
             st.session_state['puntos'].append(new_point)
             st.rerun()
 
-    # 4. RESULTADOS Y DESCARGA
+    # 3. EXPORTAR
     if st.session_state['puntos']:
         st.divider()
-        col_res1, col_res2 = st.columns([1, 2])
+        st.metric("Equipos Colocados", len(st.session_state['puntos']))
         
-        with col_res1:
-            st.metric("Equipos Colocados", len(st.session_state['puntos']))
-        
-        with col_res2:
-            if st.button("📸 Generar Imagen Final"):
-                buf = io.BytesIO()
-                # Usar Matplotlib para exportar con transparencia bonita
-                fig, ax = plt.subplots(figsize=(10, 10 * display_img.height / display_img.width))
-                ax.imshow(st.session_state['base_image'])
-                ax.axis('off')
-                
-                for p in st.session_state['puntos']:
-                    c = patches.Circle((p['x'], p['y']), p['radio'], color=p['color'], alpha=0.3)
-                    ax.add_patch(c)
-                    ax.add_patch(patches.Circle((p['x'], p['y']), 5, color="white"))
-                
-                plt.savefig(buf, format="png", bbox_inches='tight', pad_inches=0)
-                st.download_button("📥 Descargar Propuesta PNG", buf.getvalue(), "propuesta_sembrado.png", "image/png")
+        if st.button("📸 Generar Imagen Final"):
+            buf = io.BytesIO()
+            fig, ax = plt.subplots(figsize=(10, 10 * display_img.height / display_img.width))
+            ax.imshow(st.session_state['base_image'])
+            ax.axis('off')
+            
+            for p in st.session_state['puntos']:
+                c = patches.Circle((p['x'], p['y']), p['radio'], color=p['color'], alpha=0.3)
+                ax.add_patch(c)
+                ax.add_patch(patches.Circle((p['x'], p['y']), 5, color="white"))
+            
+            plt.savefig(buf, format="png", bbox_inches='tight', pad_inches=0)
+            st.download_button("📥 Descargar Propuesta PNG", buf.getvalue(), "propuesta_sembrado.png", "image/png")
 
 else:
     st.info("👆 Sube un plano para comenzar.")
