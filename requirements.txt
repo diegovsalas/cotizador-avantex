@@ -3,3 +3,4 @@ streamlit-drawable-canvas
 pymupdf
 matplotlib
 Pillow
+pdf2image
