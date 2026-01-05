@@ -1,5 +1,5 @@
 import streamlit as st
-from PIL import Image
+from PIL import Image, ImageOps
 import io
 from streamlit_drawable_canvas import st_canvas
 import fitz  # PyMuPDF
@@ -18,69 +18,70 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🌱 Aromatex: Sembrado V5 (Anti-Transparencia)")
+st.title("🌱 Aromatex: Sembrado V6 (Fuerza Bruta)")
 
 # --- GESTIÓN DE ESTADO (SESSION STATE) ---
 if 'scale_px_per_meter' not in st.session_state:
     st.session_state['scale_px_per_meter'] = 35.0 
+# NOTA: Hemos eliminado el caché de imagen para obligar a recargar
 if 'bg_image' not in st.session_state:
     st.session_state['bg_image'] = None
-if 'original_file_name' not in st.session_state:
-    st.session_state['original_file_name'] = ""
 
-# --- FUNCIONES AUXILIARES (LÓGICA BLINDADA) ---
+# --- FUNCIONES AUXILIARES ---
 def load_image(uploaded_file):
-    # Solo procesar si es un archivo nuevo
-    if uploaded_file.name != st.session_state['original_file_name']:
-        image = None
-        
-        if uploaded_file.type == "application/pdf":
-            # 1. Abrir PDF con PyMuPDF
+    # Eliminamos el "if" que comprobaba el nombre para FORZAR el procesamiento
+    # Esto asegura que si subes el mismo archivo, se arregle el fondo.
+    
+    image = None
+    
+    if uploaded_file.type == "application/pdf":
+        try:
+            # 1. Abrir PDF
             doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
             page = doc.load_page(0)
             
-            # 2. Renderizar con alta calidad (Zoom 2.5x es buen balance calidad/velocidad)
-            # alpha=True captura la transparencia original del CAD
-            mat = fitz.Matrix(2.5, 2.5)
-            pix = page.get_pixmap(matrix=mat, alpha=True) 
+            # 2. Renderizar a imagen
+            # alpha=False: Pide a PyMuPDF que use fondo blanco (no transparente)
+            mat = fitz.Matrix(2.0, 2.0) # Zoom 2x es suficiente y rápido
+            pix = page.get_pixmap(matrix=mat, alpha=False) 
             
-            # 3. Convertir a imagen PIL
+            # 3. Convertir a PIL
             img_data = pix.tobytes("png")
-            pdf_image = Image.open(io.BytesIO(img_data))
+            image = Image.open(io.BytesIO(img_data))
             
-            # 4. --- EL TRUCO DEL FONDO BLANCO ---
-            # Crear un lienzo blanco puro del mismo tamaño
-            background = Image.new("RGB", pdf_image.size, (255, 255, 255))
+            # 4. Asegurar formato RGB (elimina cualquier transparencia residual)
+            image = image.convert("RGB")
             
-            # Pegar el plano encima. 
-            # Si tiene canal Alpha (transparencia), lo usamos como máscara.
-            if pdf_image.mode == 'RGBA':
-                background.paste(pdf_image, mask=pdf_image.split()[3])
-            else:
-                background.paste(pdf_image)
+        except Exception as e:
+            st.error(f"Error leyendo el PDF: {e}")
+            return
             
-            image = background
-            
-        else:
-            # Si suben un JPG/PNG normal
+    else:
+        # Imágenes normales (JPG/PNG)
+        try:
             image = Image.open(uploaded_file)
-            # Asegurar que también tenga fondo blanco por si es un PNG transparente
-            if image.mode in ('RGBA', 'LA'):
-                background = Image.new("RGB", image.size, (255, 255, 255))
-                background.paste(image, mask=image.split()[-1])
-                image = background
+            # Si tiene transparencia (PNG), poner fondo blanco
+            if image.mode in ('RGBA', 'LA') or (image.mode == 'P' and 'transparency' in image.info):
+                alpha = image.convert('RGBA').split()[-1]
+                bg = Image.new("RGB", image.size, (255, 255, 255))
+                bg.paste(image, mask=alpha)
+                image = bg
             else:
                 image = image.convert("RGB")
+        except Exception as e:
+            st.error(f"Error leyendo imagen: {e}")
+            return
+    
+    # 5. Redimensionar para la web (evita que la imagen sea gigante y falle)
+    if image:
+        base_width = 1200
+        w_percent = (base_width / float(image.size[0]))
+        h_size = int((float(image.size[1]) * float(w_percent)))
+        image = image.resize((base_width, h_size), Image.Resampling.LANCZOS)
         
-        # 5. Redimensionar para visualización web (Ancho 1200px estandar)
-        if image:
-            base_width = 1200
-            w_percent = (base_width / float(image.size[0]))
-            h_size = int((float(image.size[1]) * float(w_percent)))
-            image = image.resize((base_width, h_size), Image.Resampling.LANCZOS)
-            
-            st.session_state['bg_image'] = image
-            st.session_state['original_file_name'] = uploaded_file.name
+        st.session_state['bg_image'] = image
+        # Forzar recarga de la app para mostrar la nueva imagen
+        # st.rerun()  <-- A veces causa bucles, mejor dejamos que fluya
 
 # --- BARRA LATERAL ---
 with st.sidebar:
@@ -124,24 +125,22 @@ with st.sidebar:
 
     if st.button("🗑️ Limpiar Todo"):
         st.session_state['bg_image'] = None
-        st.session_state['original_file_name'] = ""
+        st.session_state['scale_px_per_meter'] = 35.0
         st.rerun()
 
 # --- ÁREA PRINCIPAL ---
 archivo = st.file_uploader("Sube el plano arquitectónico (PDF, JPG, PNG)", type=["pdf", "jpg", "png"])
 
 if archivo:
-    try:
-        load_image(archivo)
-    except Exception as e:
-        st.error(f"Error al procesar el archivo: {e}")
+    # Llamamos a load_image siempre, ignorando caché
+    load_image(archivo)
     
     if st.session_state['bg_image']:
         img = st.session_state['bg_image']
         
         # --- MODO CALIBRACIÓN ---
         if modo == "📏 Calibrar Escala":
-            st.warning("MODO CALIBRACIÓN: Dibuja una línea de referencia (Ej. puerta o cota).")
+            st.warning("MODO CALIBRACIÓN: Dibuja una línea de referencia.")
             
             canvas_calib = st_canvas(
                 fill_color="rgba(0, 0, 0, 0)",
@@ -160,7 +159,6 @@ if archivo:
                 objects = canvas_calib.json_data["objects"]
                 if len(objects) > 0:
                     last_obj = objects[-1]
-                    # Pitágoras para obtener distancia visual
                     width_obj = last_obj["width"] * last_obj["scaleX"]
                     height_obj = last_obj["height"] * last_obj["scaleY"]
                     dist_px = math.sqrt(width_obj**2 + height_obj**2)
@@ -199,7 +197,6 @@ if archivo:
                 if len(objects) > 0:
                     st.write("### 🖼️ Vista Previa y Descarga")
                     
-                    # Generar imagen HD para descarga
                     fig, ax = plt.subplots(figsize=(12, 12 * img.height / img.width))
                     ax.imshow(img)
                     ax.axis('off')
@@ -208,10 +205,8 @@ if archivo:
                     for obj in objects:
                         conteo += 1
                         x, y = obj["left"], obj["top"]
-                        # Círculo área
                         circ = patches.Circle((x, y), radio_px_pantalla, linewidth=2, edgecolor=color_hex, facecolor=color_hex, alpha=0.3)
                         ax.add_patch(circ)
-                        # Punto centro
                         center = patches.Circle((x, y), 5, color="white")
                         ax.add_patch(center)
 
