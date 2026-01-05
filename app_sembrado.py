@@ -34,14 +34,16 @@ def load_image(uploaded_file):
         if uploaded_file.type == "application/pdf":
             doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
             page = doc.load_page(0)
-            mat = fitz.Matrix(2, 2)
+            # Aumentamos Matrix a 3.0 para mejor resolución al hacer zoom
+            mat = fitz.Matrix(3, 3)
             pix = page.get_pixmap(matrix=mat)
             img_data = pix.tobytes("png")
             image = Image.open(io.BytesIO(img_data))
         else:
             image = Image.open(uploaded_file)
         
-        base_width = 1000
+        # Ajuste de tamaño base (ancho 1200px para buena visibilidad)
+        base_width = 1200
         w_percent = (base_width / float(image.size[0]))
         h_size = int((float(image.size[1]) * float(w_percent)))
         image = image.resize((base_width, h_size), Image.Resampling.LANCZOS)
@@ -57,8 +59,7 @@ with st.sidebar:
     tipo_equipo = st.selectbox("Modelo de Difusor", 
         ["Home Pro (100 m²)", "Advance Pro (300 m²)", "Extreme (800 m²)"])
     
-    # --- CORRECCIÓN DE COLORES ---
-    # Usamos Hexadecimal simple para evitar errores en Matplotlib
+    # Definición de radios y colores
     if "Home" in tipo_equipo:
         radio_real = 5.6
         color_hex = "#2E8B57" # Verde SeaGreen
@@ -69,18 +70,32 @@ with st.sidebar:
         radio_real = 16.0
         color_hex = "#DC143C" # Rojo Crimson
 
-    # Definimos colores derivados
-    # "44" al final de un hex añade transparencia (alpha ~25%)
+    # Color de relleno con transparencia
     canvas_fill_color = color_hex + "44"  
 
     st.divider()
     modo = st.radio("Modo de trabajo:", ["📏 Calibrar Escala", "📍 Sembrar Equipos"], index=1)
     
     st.divider()
-    st.metric("Escala Actual", f"{st.session_state['scale_px_per_meter']:.1f} px/m")
+    st.subheader("⚙️ Ajuste de Escala")
     
+    # OPCIÓN DE ESCALA MANUAL
+    # Permite al usuario editar el valor numérico directamente
+    escala_manual = st.number_input(
+        "Píxeles por metro (Manual):", 
+        value=float(st.session_state['scale_px_per_meter']),
+        step=0.1,
+        format="%.2f",
+        help="Edita este valor manualmente si conoces la escala exacta."
+    )
+    
+    # Si el usuario cambia el input manual, actualizamos el estado
+    if escala_manual != st.session_state['scale_px_per_meter']:
+        st.session_state['scale_px_per_meter'] = escala_manual
+        st.rerun()
+
     radio_px_pantalla = int(radio_real * st.session_state['scale_px_per_meter'])
-    st.caption(f"Radio: {radio_real}m ({radio_px_pantalla} px)")
+    st.caption(f"Radio cobertura: {radio_real}m ({radio_px_pantalla} px)")
 
     if st.button("🗑️ Limpiar Todo"):
         st.session_state['bg_image'] = None
@@ -98,8 +113,9 @@ if archivo:
         
         # --- MODO CALIBRACIÓN ---
         if modo == "📏 Calibrar Escala":
-            st.info("💡 Dibuja una línea sobre una medida conocida (ej. puerta) y escribe su longitud real.")
+            st.info("💡 Dibuja una línea sobre una medida conocida (ej. puerta) y escribe su longitud real abajo.")
             
+            # Canvas con toolbar activado para zoom
             canvas_calib = st_canvas(
                 fill_color="rgba(0, 0, 0, 0)",
                 stroke_width=3,
@@ -109,6 +125,7 @@ if archivo:
                 height=img.height,
                 width=img.width,
                 drawing_mode="line",
+                display_toolbar=True,  # <--- ACTIVAR ZOOM Y PAN
                 key="canvas_calib"
             )
             
@@ -116,11 +133,14 @@ if archivo:
                 objects = canvas_calib.json_data["objects"]
                 if len(objects) > 0:
                     last_obj = objects[-1]
+                    # Calcular distancia en píxeles considerando transformaciones
                     x1, y1 = last_obj["left"], last_obj["top"]
-                    x2 = x1 + (last_obj["width"] * last_obj["scaleX"])
-                    y2 = y1 + (last_obj["height"] * last_obj["scaleY"])
-                    
-                    dist_px = math.sqrt((x2 - x1)**2 + (y2 - y1)**2)
+                    # Ajuste: st_canvas devuelve scaleX/scaleY si el usuario estiró la linea, 
+                    # pero en modo 'line' simple suele ser width/height proyectado.
+                    # Calculamos hipotenusa simple basada en coordenadas del bounding box para simplificar:
+                    width_obj = last_obj["width"] * last_obj["scaleX"]
+                    height_obj = last_obj["height"] * last_obj["scaleY"]
+                    dist_px = math.sqrt(width_obj**2 + height_obj**2)
                     
                     col1, col2 = st.columns([2,1])
                     with col1:
@@ -131,15 +151,16 @@ if archivo:
                     if st.button("✅ Aplicar Calibración"):
                         nueva_escala = dist_px / metros_reales
                         st.session_state['scale_px_per_meter'] = nueva_escala
-                        st.success(f"Escala calibrada a {nueva_escala:.2f} px/m")
+                        st.success(f"Escala guardada: {nueva_escala:.2f} px/m")
                         st.rerun()
 
         # --- MODO SEMBRADO ---
         elif modo == "📍 Sembrar Equipos":
-            st.success(f"Colocando: **{tipo_equipo}**")
+            st.success(f"Colocando: **{tipo_equipo}** (Haz clic en el plano)")
+            st.caption("Usa las herramientas de la izquierda del plano para hacer Zoom 🔍 y Mover ✋")
             
             canvas_sembrado = st_canvas(
-                fill_color=canvas_fill_color, # Usamos el Hex con transparencia
+                fill_color=canvas_fill_color,
                 stroke_width=2,
                 stroke_color=color_hex,
                 background_image=img,
@@ -148,6 +169,7 @@ if archivo:
                 width=img.width,
                 drawing_mode="point",
                 point_display_radius=radio_px_pantalla, 
+                display_toolbar=True, # <--- ACTIVAR ZOOM Y PAN
                 key=f"canvas_sembrado_{tipo_equipo}_{st.session_state['scale_px_per_meter']}"
             )
             
@@ -157,7 +179,7 @@ if archivo:
                 if len(objects) > 0:
                     st.write("### Vista Previa")
                     
-                    # Generar imagen final
+                    # Generar imagen final para descarga (Alta resolución)
                     fig, ax = plt.subplots(figsize=(12, 12 * img.height / img.width))
                     ax.imshow(img)
                     ax.axis('off')
@@ -167,14 +189,15 @@ if archivo:
                         conteo += 1
                         x, y = obj["left"], obj["top"]
                         
-                        # CORRECCIÓN AQUÍ: Usamos color_hex y alpha separado
+                        # Dibujar círculo de cobertura
                         circ = patches.Circle((x, y), radio_px_pantalla, 
                                             linewidth=2, 
                                             edgecolor=color_hex, 
                                             facecolor=color_hex,
-                                            alpha=0.3) # Transparencia controlada por Matplotlib
+                                            alpha=0.3)
                         ax.add_patch(circ)
                         
+                        # Dibujar punto central
                         center = patches.Circle((x, y), 5, color="white")
                         ax.add_patch(center)
 
