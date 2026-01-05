@@ -1,7 +1,8 @@
 import streamlit as st
 from PIL import Image
 import io
-import os # Necesario para gestión de archivos
+import os
+import numpy as np # <--- AGREGADO: Esto faltaba y causaba el error
 from streamlit_drawable_canvas import st_canvas
 import fitz  # PyMuPDF
 import matplotlib.pyplot as plt
@@ -14,12 +15,12 @@ st.set_page_config(page_title="Sembrado Aromatex", layout="wide")
 st.markdown("""
     <style>
     .block-container {padding-top: 1rem;}
-    /* Borde blanco para ver el canvas en modo oscuro */
+    /* Borde blanco sutil para ver el canvas en modo oscuro */
     iframe {border: 1px solid #ffffff44;}
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🌱 Aromatex: V17 (Método Archivo Físico)")
+st.title("🌱 Aromatex: V18 (Corregido)")
 
 # --- ESTADO ---
 if 'img_path' not in st.session_state: st.session_state['img_path'] = None
@@ -54,12 +55,10 @@ def process_file(uploaded_file):
             h_size = int((float(pil_image.height) * float(w_percent)))
             pil_image = pil_image.resize((MAX_WIDTH, h_size), Image.Resampling.LANCZOS)
 
-        # 4. --- EL TRUCO: GUARDAR EN DISCO ---
-        # Guardamos la imagen físicamente. Esto elimina cualquier problema de memoria RAM.
+        # 4. GUARDAR EN DISCO (Solución de memoria)
         temp_filename = "temp_plano_render.png"
         pil_image.save(temp_filename, format="PNG")
         
-        # Guardamos la RUTA del archivo en el estado, no la imagen en sí
         st.session_state['img_path'] = temp_filename
         st.session_state['img_id'] = str(uuid.uuid4())
         
@@ -92,7 +91,6 @@ with st.sidebar:
     if st.button("🗑️ Reiniciar"):
         st.session_state['img_path'] = None
         st.session_state['last_file'] = None
-        # Limpiar archivo temporal si existe
         if os.path.exists("temp_plano_render.png"):
             os.remove("temp_plano_render.png")
         st.rerun()
@@ -108,20 +106,21 @@ if uploaded_file:
         st.rerun()
 
     if st.session_state['img_path'] and os.path.exists(st.session_state['img_path']):
-        # Abrimos la imagen desde el disco
+        # Cargar desde disco
         bg_image_obj = Image.open(st.session_state['img_path'])
         
-        st.image(bg_image_obj, caption="Vista Previa (Desde Disco)", use_column_width=True)
+        # Vista Previa
+        st.image(bg_image_obj, caption="Vista Previa", use_column_width=True)
         st.write("---")
         
-        # EL CANVAS
+        # CANVAS
         radio_px = int(radio_real * st.session_state['scale_px_per_meter'])
         
         canvas_result = st_canvas(
             fill_color=color_hex + "44",
             stroke_width=2,
             stroke_color=color_hex,
-            background_image=bg_image_obj, # Enviamos el objeto cargado desde archivo
+            background_image=bg_image_obj,
             update_streamlit=True,
             height=bg_image_obj.height,
             width=bg_image_obj.width,
@@ -131,7 +130,7 @@ if uploaded_file:
             key=f"canvas_{st.session_state['img_id']}"
         )
         
-        # Lógica
+        # LÓGICA
         if canvas_result.json_data and "objects" in canvas_result.json_data:
             objects = canvas_result.json_data["objects"]
             if len(objects) > 0:
@@ -148,10 +147,11 @@ if uploaded_file:
                 
                 elif modo == "📍 Sembrar Equipos":
                     st.metric("Total", len(objects))
-                    if st.button("Generar Imagen"):
+                    if st.button("Generar Imagen Final"):
                         buf = io.BytesIO()
-                        # Para Matplotlib usamos array numérico, es más seguro
+                        # Aquí usamos np, que ahora sí está importado
                         img_array = np.array(bg_image_obj)
+                        
                         fig, ax = plt.subplots(figsize=(10, 10 * bg_image_obj.height / bg_image_obj.width))
                         ax.imshow(img_array)
                         ax.axis('off')
