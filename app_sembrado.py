@@ -24,19 +24,12 @@ st.markdown("""
         border: 1px solid #6366f1;
         padding: 10px;
         border-radius: 5px;
-        margin-bottom: 10px;
-        text-align: center;
     }
-    /* Estilo para el botón de descarga PDF */
-    .stDownloadButton button {
-        background-color: #FF4B4B !important;
-        color: white !important;
-        font-weight: bold !important;
-    }
+    iframe {border: 1px solid #ddd; box-shadow: 0 4px 6px rgba(0,0,0,0.1);}
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🌱 Aromatex: Sembrado V39 (Reporte PDF)")
+st.title("🌱 Aromatex: Sembrado Profesional V34")
 
 # --- ESTADO ---
 if 'puntos' not in st.session_state: st.session_state['puntos'] = []
@@ -149,14 +142,18 @@ def generar_pdf(imagen_base, puntos, texto_ia, escala_px):
 with st.sidebar:
     st.header("⚙️ Configuración")
     
-    # --- 1. DATOS DEL ESPACIO ---
-    with st.expander("📐 Datos del Espacio", expanded=True):
-        area_total = st.number_input("Área Piso de Venta (m²):", value=100.0, step=10.0)
-        altura = st.number_input("Altura Techo (m):", value=3.00, step=0.10)
-        
-        factor_altura = 3.0 / altura if altura > 0 else 1.0
-        if altura > 3.1:
-            st.warning(f"⚠️ Techo alto ({altura}m). La cobertura se reduce un {100*(1-factor_altura):.0f}%.")
+    # --- GESTIÓN INTELIGENTE DE API KEY ---
+    api_key = None
+    
+    # 1. Intentamos leer de los secretos (automático)
+    if "GOOGLE_API_KEY" in st.secrets:
+        api_key = st.secrets["GOOGLE_API_KEY"]
+        st.success("🔑 API Key cargada automáticamente")
+    else:
+        # 2. Si no existe, pedimos manual
+        with st.expander("🔑 Configuración IA", expanded=True):
+            api_key = st.text_input("Google API Key:", type="password")
+            st.caption("Consejo: Crea .streamlit/secrets.toml para no escribirla siempre.")
 
     st.divider()
     
@@ -185,33 +182,19 @@ with st.sidebar:
     modo = st.radio("Herramienta:", ["📍 Sembrar Equipos", "📏 Calibrar Escala"], index=0)
 
     if modo == "📍 Sembrar Equipos":
-        st.subheader("📦 Selección de Equipo")
-        opciones = ["Advance Pro", "Plus Pro", "Extreme"]
-        tipo = st.selectbox("Modelo", opciones)
-        
-        if tipo == "Advance Pro":
-            base_area = 150
+        tipo = st.selectbox("Modelo", ["Home Pro (100 m²)", "Advance Pro (300 m²)", "Extreme (800 m²)"])
+        if "Home" in tipo:
             color = "#2E8B57"
-        elif tipo == "Plus Pro":
-            base_area = 200
+            radio_real = 5.6
+        elif "Advance" in tipo:
             color = "#FF8C00"
+            radio_real = 9.7
         else:
-            base_area = 800
             color = "#DC143C"
-            
-        area_real_cubierta = base_area * factor_altura
-        radio_real = math.sqrt(area_real_cubierta / math.pi)
+            radio_real = 16.0
+        
         radio_px = int(radio_real * st.session_state['scale_px_per_meter'])
-        
-        equipos_necesarios = math.ceil(area_total / area_real_cubierta)
-        
-        st.markdown(f"""
-        <div class="metrics-box">
-            <b>Cobertura Real (a {altura}m):</b> {area_real_cubierta:.1f} m²<br>
-            <b>Radio visual:</b> {radio_real:.1f} m<br>
-            <b>Sugerencia:</b> Necesitas {equipos_necesarios} equipos
-        </div>
-        """, unsafe_allow_html=True)
+        st.caption(f"Radio visual: {radio_px} px")
         
         col1, col2 = st.columns(2)
         if col1.button("↩️ Deshacer"):
@@ -311,12 +294,6 @@ if st.session_state['base_image']:
             draw.ellipse((p2['x']-5, p2['y']-5, p2['x']+5, p2['y']+5), fill="blue", outline="white")
             draw.line([(p1['x'], p1['y']), (p2['x'], p2['y'])], fill="blue", width=3)
 
-    # TESTIGO 1 METRO
-    px_m = st.session_state['scale_px_per_meter']
-    draw.line([(30, display_img.height-30), (30+px_m, display_img.height-30)], fill="red", width=6)
-    draw.text((30, display_img.height-55), "1m", fill="red")
-
-    # INTERACCIÓN
     if modo == "📍 Sembrar Equipos":
         st.write(f"📍 Equipos sembrados: **{len(st.session_state['puntos'])}**")
     else:
@@ -328,6 +305,7 @@ if st.session_state['base_image']:
         x, y = value["x"], value["y"]
         
         if modo == "📍 Sembrar Equipos":
+            # Usamos el radio calculado dinámicamente arriba
             new_point = {"x": x, "y": y, "color": color, "radio": radio_px}
             if not st.session_state['puntos'] or st.session_state['puntos'][-1]['x'] != x:
                 st.session_state['puntos'].append(new_point)
@@ -338,21 +316,18 @@ if st.session_state['base_image']:
                     st.session_state['calibracion_clicks'].append({"x": x, "y": y})
                     st.rerun()
 
-    # --- ZONA DE DESCARGA (NUEVA - PDF) ---
     if st.session_state['puntos'] and modo == "📍 Sembrar Equipos":
         st.divider()
-        st.subheader("📑 Generar Reporte")
-        
-        # Botón que genera el PDF al vuelo
-        if st.download_button(
-            label="📄 Descargar Reporte PDF Oficial",
-            data=generar_pdf(
-                st.session_state['base_image'],
-                st.session_state['puntos'],
-                st.session_state['sugerencias_puntos'],
-                st.session_state['scale_px_per_meter']
-            ),
-            file_name="Reporte_Aromatex.pdf",
-            mime="application/pdf"
-        ):
-            st.success("Reporte generado exitosamente.")
+        if st.button("📸 Descargar Propuesta"):
+            buf = io.BytesIO()
+            fig, ax = plt.subplots(figsize=(12, 12 * display_img.height / display_img.width))
+            ax.imshow(st.session_state['base_image'])
+            ax.axis('off')
+            
+            for p in st.session_state['puntos']:
+                c = patches.Circle((p['x'], p['y']), p['radio'], color=p['color'], alpha=0.3)
+                ax.add_patch(c)
+                ax.add_patch(patches.Circle((p['x'], p['y']), 5, color="white"))
+            
+            plt.savefig(buf, format="png", bbox_inches='tight', pad_inches=0, dpi=150)
+            st.download_button("Bajar Imagen PNG", buf.getvalue(), "sembrado.png", "image/png")
