@@ -89,19 +89,29 @@ with st.sidebar:
     st.divider()
 
     if modo == "📍 Sembrar Equipos":
-        tipo = st.selectbox("Modelo", ["Advance Pro (100 m²)", "Plus Pro (300 m²)", "Extreme (800 m²)"])
-        if "Advane" in tipo:
-            color = "#2E8B57"
-            radio_real = 5.6
+        # --- ACTUALIZACIÓN DE MODELOS ---
+        opciones = [
+            "Advance Pro (80-150 m²)", 
+            "Plus Pro (150-200 m²)", 
+            "Extreme (500-800 m²)"
+        ]
+        tipo = st.selectbox("Modelo", opciones)
+        
+        if "Advance" in tipo:
+            color = "#2E8B57" # Verde
+            # Calculado para cubrir hasta 150m2
+            radio_real = 6.9 
         elif "Plus" in tipo:
-            color = "#FF8C00"
-            radio_real = 9.7
+            color = "#FF8C00" # Naranja
+            # Calculado para cubrir hasta 200m2
+            radio_real = 8.0 
         else:
-            color = "#DC143C"
+            color = "#DC143C" # Rojo
+            # Calculado para cubrir hasta 800m2
             radio_real = 16.0
         
         radio_px = int(radio_real * st.session_state['scale_px_per_meter'])
-        st.caption(f"Radio visual: {radio_px} px")
+        st.caption(f"Radio cobertura: {radio_real}m ({radio_px} px)")
         
         col1, col2 = st.columns(2)
         if col1.button("↩️ Deshacer"):
