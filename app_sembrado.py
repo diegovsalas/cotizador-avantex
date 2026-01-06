@@ -89,11 +89,11 @@ with st.sidebar:
     st.divider()
 
     if modo == "📍 Sembrar Equipos":
-        tipo = st.selectbox("Modelo", ["Home Pro (100 m²)", "Advance Pro (300 m²)", "Extreme (800 m²)"])
-        if "Home" in tipo:
+        tipo = st.selectbox("Modelo", ["Advance Pro (100 m²)", "Plus Pro (300 m²)", "Extreme (800 m²)"])
+        if "Advane" in tipo:
             color = "#2E8B57"
             radio_real = 5.6
-        elif "Advance" in tipo:
+        elif "Plus" in tipo:
             color = "#FF8C00"
             radio_real = 9.7
         else:
