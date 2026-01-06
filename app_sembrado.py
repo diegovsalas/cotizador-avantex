@@ -13,7 +13,6 @@ st.set_page_config(page_title="Sembrado Aromatex + IA", layout="wide", page_icon
 st.markdown("""
     <style>
     .block-container {padding-top: 1rem;}
-    /* Caja de sugerencias IA */
     .sugerencia-box {
         background-color: #f0f2f6;
         border-left: 5px solid #6366f1;
@@ -25,7 +24,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🌱 Aromatex: Sembrado de Precisión + IA")
+st.title("🌱 Aromatex: Sembrado Profesional V34")
 
 # --- ESTADO ---
 if 'puntos' not in st.session_state: st.session_state['puntos'] = []
@@ -65,23 +64,30 @@ def process_file(uploaded_file):
         st.error(f"Error: {e}")
         return None
 
-# --- SIDEBAR COMPLETO ---
+# --- SIDEBAR ---
 with st.sidebar:
     st.header("⚙️ Panel de Control")
     
-    # 1. API KEY (IA)
-    with st.expander("🔑 Configuración IA", expanded=True):
-        api_key = st.text_input("Google API Key:", type="password")
+    # --- GESTIÓN INTELIGENTE DE API KEY ---
+    api_key = None
+    
+    # 1. Intentamos leer de los secretos (automático)
+    if "GOOGLE_API_KEY" in st.secrets:
+        api_key = st.secrets["GOOGLE_API_KEY"]
+        st.success("🔑 API Key cargada automáticamente")
+    else:
+        # 2. Si no existe, pedimos manual
+        with st.expander("🔑 Configuración IA", expanded=True):
+            api_key = st.text_input("Google API Key:", type="password")
+            st.caption("Consejo: Crea .streamlit/secrets.toml para no escribirla siempre.")
 
     st.divider()
 
-    # 2. SELECCIÓN DE MODO
     st.subheader("Modo de Trabajo")
     modo = st.radio("Herramienta:", ["📍 Sembrar Equipos", "📏 Calibrar Escala"], index=0)
 
     st.divider()
 
-    # 3. CONTROLES SEGÚN MODO
     if modo == "📍 Sembrar Equipos":
         tipo = st.selectbox("Modelo", ["Home Pro (100 m²)", "Advance Pro (300 m²)", "Extreme (800 m²)"])
         if "Home" in tipo:
@@ -178,7 +184,7 @@ if st.session_state['base_image']:
     display_img = st.session_state['base_image'].copy()
     draw = ImageDraw.Draw(display_img, "RGBA")
     
-    # DIBUJAR PUNTOS (ANILLOS)
+    # DIBUJAR PUNTOS
     for p in st.session_state['puntos']:
         x, y = p['x'], p['y']
         r = p['radio']
@@ -196,13 +202,11 @@ if st.session_state['base_image']:
             draw.ellipse((p2['x']-5, p2['y']-5, p2['x']+5, p2['y']+5), fill="blue", outline="white")
             draw.line([(p1['x'], p1['y']), (p2['x'], p2['y'])], fill="blue", width=3)
 
-    # TITULO SEGÚN MODO
     if modo == "📍 Sembrar Equipos":
         st.write(f"📍 **Modo Sembrado** | Equipos: {len(st.session_state['puntos'])}")
     else:
         st.info("📏 **Modo Calibración** | Haz clic en dos puntos para medir.")
 
-    # COMPONENTE DE CLICS
     value = streamlit_image_coordinates(display_img, key="clicker")
     
     if value is not None:
@@ -220,7 +224,6 @@ if st.session_state['base_image']:
                     st.session_state['calibracion_clicks'].append({"x": x, "y": y})
                     st.rerun()
 
-    # --- DESCARGA ---
     if st.session_state['puntos'] and modo == "📍 Sembrar Equipos":
         st.divider()
         if st.button("📸 Descargar Propuesta"):
