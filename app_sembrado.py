@@ -1,5 +1,5 @@
 import streamlit as st
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 import io
 import fitz  # PyMuPDF
 import matplotlib.pyplot as plt
@@ -9,22 +9,32 @@ from streamlit_image_coordinates import streamlit_image_coordinates
 import math
 
 # --- CONFIGURACIÓN ---
-st.set_page_config(page_title="Sembrado Aromatex", layout="wide", page_icon="📏")
+st.set_page_config(page_title="Sembrado Aromatex + IA", layout="wide", page_icon="🧬")
 st.markdown("""
     <style>
     .block-container {padding-top: 1rem;}
+    /* Caja de sugerencias IA */
+    .sugerencia-box {
+        background-color: #f0f2f6;
+        border-left: 5px solid #6366f1;
+        padding: 15px;
+        margin-bottom: 20px;
+        border-radius: 5px;
+    }
     iframe {border: 1px solid #ddd; box-shadow: 0 4px 6px rgba(0,0,0,0.1);}
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🌱 Aromatex: Sembrado de Precisión")
+st.title("🌱 Aromatex: Sembrado de Precisión + IA")
 
 # --- ESTADO ---
 if 'puntos' not in st.session_state: st.session_state['puntos'] = []
 if 'scale_px_per_meter' not in st.session_state: st.session_state['scale_px_per_meter'] = 35.0
 if 'base_image' not in st.session_state: st.session_state['base_image'] = None
 if 'file_id' not in st.session_state: st.session_state['file_id'] = ""
-if 'calibracion_clicks' not in st.session_state: st.session_state['calibracion_clicks'] = [] # Para guardar los 2 clics de medir
+if 'analisis_ia' not in st.session_state: st.session_state['analisis_ia'] = ""
+if 'sugerencias_puntos' not in st.session_state: st.session_state['sugerencias_puntos'] = ""
+if 'calibracion_clicks' not in st.session_state: st.session_state['calibracion_clicks'] = []
 
 # --- PROCESAMIENTO ---
 def process_file(uploaded_file):
@@ -40,12 +50,10 @@ def process_file(uploaded_file):
         else:
             image = Image.open(uploaded_file)
 
-        # APLANAR A BLANCO
         image = image.convert("RGBA")
         background = Image.new("RGBA", image.size, (255, 255, 255, 255))
         image = Image.alpha_composite(background, image).convert("RGB")
 
-        # Redimensionar (Ancho fijo grande)
         target_width = 1000
         if image.width > target_width:
             ratio = target_width / float(image.width)
@@ -57,19 +65,25 @@ def process_file(uploaded_file):
         st.error(f"Error: {e}")
         return None
 
-# --- SIDEBAR ---
+# --- SIDEBAR COMPLETO ---
 with st.sidebar:
     st.header("⚙️ Panel de Control")
     
-    # 1. MODO DE TRABAJO
-    modo = st.radio("¿Qué quieres hacer?", ["📍 Sembrar Equipos", "📏 Calibrar Escala"], index=0)
-    
+    # 1. API KEY (IA)
+    with st.expander("🔑 Configuración IA", expanded=True):
+        api_key = st.text_input("Google API Key:", type="password")
+
     st.divider()
 
+    # 2. SELECCIÓN DE MODO
+    st.subheader("Modo de Trabajo")
+    modo = st.radio("Herramienta:", ["📍 Sembrar Equipos", "📏 Calibrar Escala"], index=0)
+
+    st.divider()
+
+    # 3. CONTROLES SEGÚN MODO
     if modo == "📍 Sembrar Equipos":
-        st.subheader("Configuración de Equipos")
         tipo = st.selectbox("Modelo", ["Home Pro (100 m²)", "Advance Pro (300 m²)", "Extreme (800 m²)"])
-        
         if "Home" in tipo:
             color = "#2E8B57"
             radio_real = 5.6
@@ -79,7 +93,7 @@ with st.sidebar:
         else:
             color = "#DC143C"
             radio_real = 16.0
-            
+        
         radio_px = int(radio_real * st.session_state['scale_px_per_meter'])
         st.caption(f"Radio visual: {radio_px} px")
         
@@ -88,39 +102,33 @@ with st.sidebar:
             if st.session_state['puntos']:
                 st.session_state['puntos'].pop()
                 st.rerun()
-        if col2.button("🗑️ Borrar Todo"):
+        if col2.button("🗑️ Borrar Puntos"):
             st.session_state['puntos'] = []
             st.rerun()
 
     else: # MODO CALIBRAR
-        st.subheader("Herramienta de Medición")
-        st.info("Haz clic en el PUNTO A (inicio) y luego en el PUNTO B (fin) de una medida conocida (ej. una puerta).")
+        st.info("Clic A (Inicio) -> Clic B (Fin)")
         
         if len(st.session_state['calibracion_clicks']) == 2:
             p1 = st.session_state['calibracion_clicks'][0]
             p2 = st.session_state['calibracion_clicks'][1]
-            
-            # Calcular distancia en píxeles (Pitágoras)
             dist_px = math.sqrt((p2['x'] - p1['x'])**2 + (p2['y'] - p1['y'])**2)
             
-            st.write(f"📏 Distancia en pantalla: **{dist_px:.1f} px**")
+            st.write(f"📏 Medida: **{dist_px:.1f} px**")
+            metros = st.number_input("Metros reales:", value=0.90, step=0.10)
             
-            metros_reales = st.number_input("¿Cuántos metros son en la realidad?", value=0.90, step=0.10)
-            
-            if st.button("✅ Calcular y Aplicar Escala"):
-                if metros_reales > 0:
-                    nueva_escala = dist_px / metros_reales
-                    st.session_state['scale_px_per_meter'] = nueva_escala
-                    st.session_state['calibracion_clicks'] = [] # Reiniciar
-                    st.success(f"¡Nueva escala guardada! {nueva_escala:.2f} Px/m")
+            if st.button("✅ Aplicar Escala"):
+                if metros > 0:
+                    st.session_state['scale_px_per_meter'] = dist_px / metros
+                    st.session_state['calibracion_clicks'] = []
+                    st.success("Escala ajustada.")
                     st.rerun()
         
-        if st.button("❌ Cancelar Medición"):
+        if st.button("❌ Reiniciar Medición"):
             st.session_state['calibracion_clicks'] = []
             st.rerun()
 
     st.divider()
-    # Mostrar escala actual (editable manualmente también)
     scale = st.number_input("Escala Actual (Px/m):", value=float(st.session_state['scale_px_per_meter']), step=0.1)
     if scale != st.session_state['scale_px_per_meter']:
         st.session_state['scale_px_per_meter'] = scale
@@ -140,71 +148,84 @@ if uploaded_file:
             st.rerun()
 
 if st.session_state['base_image']:
-    
-    # PREPARAR IMAGEN DE VISUALIZACIÓN
+
+    # --- ZONA IA (SOLO VISIBLE EN MODO SEMBRADO Y SI HAY KEY) ---
+    if api_key and modo == "📍 Sembrar Equipos":
+        col_btn, col_txt = st.columns([1, 4])
+        with col_btn:
+            if st.button("✨ Preguntar a Gemini"):
+                try:
+                    with st.spinner("Analizando plano..."):
+                        genai.configure(api_key=api_key)
+                        model = genai.GenerativeModel('gemini-flash-latest')
+                        prompt = """
+                        Actúa como experto en Marketing Olfativo. Analiza el plano visualmente.
+                        TAREA: Dame una lista de 3 puntos estratégicos para colocar difusores.
+                        FORMATO: "📍 **[Zona]**: [Instrucción visual breve]"
+                        """
+                        response = model.generate_content([prompt, st.session_state['base_image']])
+                        st.session_state['sugerencias_puntos'] = response.text
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"Error IA: {e}")
+        
+        with col_txt:
+            if st.session_state['sugerencias_puntos']:
+                with st.expander("💡 Ver Sugerencias de Gemini", expanded=True):
+                    st.markdown(st.session_state['sugerencias_puntos'])
+
+    # --- VISUALIZADOR ---
     display_img = st.session_state['base_image'].copy()
     draw = ImageDraw.Draw(display_img, "RGBA")
     
-    # A) DIBUJAR PUNTOS DE SEMBRADO (Si existen)
+    # DIBUJAR PUNTOS (ANILLOS)
     for p in st.session_state['puntos']:
         x, y = p['x'], p['y']
         r = p['radio']
-        # Anillo
-        draw.ellipse((x-r, y-r, x+r, y+r), outline=p['color'], width=3)
-        # Centro
-        draw.ellipse((x-5, y-5, x+5, y+5), fill="white", outline="black")
+        draw.ellipse((x-r, y-r, x+r, y+r), outline=p['color'], width=4)
+        draw.ellipse((x-6, y-6, x+6, y+6), fill="white", outline="black")
+        draw.ellipse((x-3, y-3, x+3, y+3), fill=p['color'])
 
-    # B) DIBUJAR LÍNEA DE CALIBRACIÓN (Si estamos midiendo)
+    # DIBUJAR CALIBRACIÓN
     clicks = st.session_state['calibracion_clicks']
     if len(clicks) > 0:
-        # Dibujar primer punto
         p1 = clicks[0]
         draw.ellipse((p1['x']-5, p1['y']-5, p1['x']+5, p1['y']+5), fill="blue", outline="white")
-        
         if len(clicks) == 2:
-            # Dibujar línea completa
             p2 = clicks[1]
             draw.ellipse((p2['x']-5, p2['y']-5, p2['x']+5, p2['y']+5), fill="blue", outline="white")
             draw.line([(p1['x'], p1['y']), (p2['x'], p2['y'])], fill="blue", width=3)
 
-    # --- COMPONENTE INTERACTIVO ---
+    # TITULO SEGÚN MODO
     if modo == "📍 Sembrar Equipos":
-        st.write("📍 **Modo Sembrado:** Haz clic para colocar equipos.")
+        st.write(f"📍 **Modo Sembrado** | Equipos: {len(st.session_state['puntos'])}")
     else:
-        st.info("📏 **Modo Calibración:** Clic 1 (Inicio) -> Clic 2 (Fin) -> Ingresa Metros en la barra lateral.")
+        st.info("📏 **Modo Calibración** | Haz clic en dos puntos para medir.")
 
-    value = streamlit_image_coordinates(
-        display_img,
-        key="clicker_principal"
-    )
+    # COMPONENTE DE CLICS
+    value = streamlit_image_coordinates(display_img, key="clicker")
     
-    # LÓGICA DE CLICS
     if value is not None:
         x, y = value["x"], value["y"]
         
-        # Lógica para MODO SEMBRADO
         if modo == "📍 Sembrar Equipos":
             new_point = {"x": x, "y": y, "color": color, "radio": radio_px}
-            # Evitar duplicados
             if not st.session_state['puntos'] or st.session_state['puntos'][-1]['x'] != x:
                 st.session_state['puntos'].append(new_point)
                 st.rerun()
                 
-        # Lógica para MODO CALIBRAR
         elif modo == "📏 Calibrar Escala":
-            # Solo permitimos 2 clicks. Si ya hay 2, el usuario debe resetear o calcular.
             if len(st.session_state['calibracion_clicks']) < 2:
-                # Evitar duplicado inmediato
                 if not st.session_state['calibracion_clicks'] or st.session_state['calibracion_clicks'][-1]['x'] != x:
                     st.session_state['calibracion_clicks'].append({"x": x, "y": y})
                     st.rerun()
 
-    # --- DESCARGA FINAL ---
+    # --- DESCARGA ---
     if st.session_state['puntos'] and modo == "📍 Sembrar Equipos":
         st.divider()
         if st.button("📸 Descargar Propuesta"):
             buf = io.BytesIO()
-            fig, ax = plt.subplots(figsize=(10, 10 * display_img.height / display_img.width))
+            fig, ax = plt.subplots(figsize=(12, 12 * display_img.height / display_img.width))
             ax.imshow(st.session_state['base_image'])
             ax.axis('off')
             
@@ -213,5 +234,5 @@ if st.session_state['base_image']:
                 ax.add_patch(c)
                 ax.add_patch(patches.Circle((p['x'], p['y']), 5, color="white"))
             
-            plt.savefig(buf, format="png", bbox_inches='tight', pad_inches=0)
-            st.download_button("Descargar PNG", buf.getvalue(), "propuesta.png", "image/png")
+            plt.savefig(buf, format="png", bbox_inches='tight', pad_inches=0, dpi=150)
+            st.download_button("Bajar Imagen PNG", buf.getvalue(), "sembrado.png", "image/png")
