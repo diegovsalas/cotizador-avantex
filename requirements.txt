@@ -1,7 +1,7 @@
 streamlit
 streamlit-image-coordinates
+google-generativeai
 pymupdf
 matplotlib
 Pillow
 numpy
-google-generativeai>=0.7.2
