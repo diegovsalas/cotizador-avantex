@@ -1,5 +1,7 @@
 streamlit
-streamlit-drawable-canvas
+streamlit-image-coordinates
+google-generativeai
 pymupdf
 matplotlib
 Pillow
+numpy
