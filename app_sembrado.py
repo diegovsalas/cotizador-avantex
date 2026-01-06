@@ -15,7 +15,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🌱 Aromatex: Sembrado con Gemini 1.5")
+st.title("🌱 Aromatex: Sembrado Inteligente")
 
 # --- ESTADO ---
 if 'puntos' not in st.session_state: st.session_state['puntos'] = []
@@ -99,29 +99,28 @@ with st.sidebar:
     
     api_key = st.text_input("Google API Key:", type="password")
     
-    if st.button("✨ Analizar Plano (Gemini 1.5)"):
+    if st.button("✨ Analizar Plano (IA)"):
         if not api_key:
             st.error("⚠️ Falta la API Key")
         elif not st.session_state['base_image']:
             st.warning("⚠️ Primero sube un plano")
         else:
             try:
-                with st.spinner("Gemini 1.5 Flash está analizando tu plano..."):
+                with st.spinner("Analizando arquitectura..."):
                     genai.configure(api_key=api_key)
                     
-                    # --- CAMBIO: Usamos el modelo estable 1.5 ---
-                    # Este modelo es muy generoso con la capa gratuita
-                    model = genai.GenerativeModel('gemini-1.5-flash')
+                    # --- SOLUCIÓN: Usamos el alias universal de tu lista ---
+                    model = genai.GenerativeModel('gemini-flash-latest')
                     
                     prompt = """
                     Actúa como un experto consultor en Marketing Olfativo para la empresa Aromatex.
                     Analiza este plano arquitectónico adjunto visualmente.
                     
-                    1. CLASIFICACIÓN: ¿Qué tipo de inmueble es?
-                    2. ZONAS CALIENTES: Identifica las 3 zonas de mayor flujo.
-                    3. ESTRATEGIA: Recomienda dónde colocar difusores de aroma.
+                    1. TIPO DE ESPACIO: ¿Es oficina, hogar, retail?
+                    2. ZONAS CLAVE: Identifica las 3 áreas de mayor importancia.
+                    3. ESTRATEGIA DE SEMBRADO: Recomienda puntualmente dónde colocar los difusores de aroma y por qué.
                     
-                    Responde en español, sé directo.
+                    Responde en español, formato ejecutivo.
                     """
                     
                     response = model.generate_content([prompt, st.session_state['base_image']])
@@ -129,7 +128,7 @@ with st.sidebar:
                     st.rerun()
                     
             except Exception as e:
-                st.error(f"Error: {e}")
+                st.error(f"Error de conexión: {e}")
 
 # --- APP PRINCIPAL ---
 uploaded_file = st.file_uploader("Sube plano (PDF, JPG)", type=["pdf", "jpg", "png"])
@@ -147,8 +146,8 @@ if st.session_state['base_image']:
     
     # 1. RESULTADO IA
     if st.session_state['analisis_ia']:
-        st.success("✅ Análisis Completo")
-        with st.expander("📄 Ver Recomendación de Estrategia", expanded=True):
+        st.success("✅ Análisis Completado")
+        with st.expander("📄 Ver Estrategia Recomendada", expanded=True):
             st.markdown(st.session_state['analisis_ia'])
         st.divider()
 
