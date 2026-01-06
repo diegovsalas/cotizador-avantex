@@ -12,10 +12,18 @@ st.set_page_config(page_title="Sembrado Aromatex + IA", layout="wide", page_icon
 st.markdown("""
     <style>
     .block-container {padding-top: 1rem;}
+    /* Estilo para la lista de sugerencias de IA */
+    .sugerencia-ia {
+        padding: 10px;
+        background-color: #f0f2f6;
+        border-left: 5px solid #FF8C00;
+        margin-bottom: 10px;
+        border-radius: 5px;
+    }
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🌱 Aromatex: Sembrado Inteligente")
+st.title("🌱 Aromatex: Sembrado Inteligente (Modo Copiloto)")
 
 # --- ESTADO ---
 if 'puntos' not in st.session_state: st.session_state['puntos'] = []
@@ -23,6 +31,7 @@ if 'scale_px_per_meter' not in st.session_state: st.session_state['scale_px_per_
 if 'base_image' not in st.session_state: st.session_state['base_image'] = None
 if 'file_id' not in st.session_state: st.session_state['file_id'] = ""
 if 'analisis_ia' not in st.session_state: st.session_state['analisis_ia'] = ""
+if 'sugerencias_puntos' not in st.session_state: st.session_state['sugerencias_puntos'] = ""
 
 # --- PROCESAMIENTO ---
 def process_file(uploaded_file):
@@ -59,7 +68,7 @@ def process_file(uploaded_file):
 # --- SIDEBAR ---
 with st.sidebar:
     st.header("1. Configuración")
-    tipo = st.selectbox("Modelo", ["Home Pro (100 m²)", "Advance Pro (300 m²)", "Extreme (800 m²)"])
+    tipo = st.selectbox("Modelo a colocar", ["Home Pro (100 m²)", "Advance Pro (300 m²)", "Extreme (800 m²)"])
     
     if "Home" in tipo:
         color = "#2E8B57"
@@ -82,9 +91,10 @@ with st.sidebar:
             st.session_state['puntos'].pop()
             st.rerun()
 
-    if col2.button("🗑️ Borrar"):
+    if col2.button("🗑️ Borrar Todo"):
         st.session_state['puntos'] = []
         st.session_state['analisis_ia'] = ""
+        st.session_state['sugerencias_puntos'] = ""
         st.rerun()
         
     st.divider()
@@ -99,32 +109,44 @@ with st.sidebar:
     
     api_key = st.text_input("Google API Key:", type="password")
     
-    if st.button("✨ Analizar Plano (IA)"):
+    if st.button("✨ Analizar y Sugerir Puntos"):
         if not api_key:
             st.error("⚠️ Falta la API Key")
         elif not st.session_state['base_image']:
             st.warning("⚠️ Primero sube un plano")
         else:
             try:
-                with st.spinner("Analizando arquitectura..."):
+                with st.spinner("Gemini está analizando el plano..."):
                     genai.configure(api_key=api_key)
-                    
-                    # --- SOLUCIÓN: Usamos el alias universal de tu lista ---
+                    # Usamos el alias universal estable
                     model = genai.GenerativeModel('gemini-flash-latest')
                     
+                    # --- PROMPT MEJORADO PARA PEDIR INSTRUCCIONES VISUALES ---
                     prompt = """
-                    Actúa como un experto consultor en Marketing Olfativo para la empresa Aromatex.
-                    Analiza este plano arquitectónico adjunto visualmente.
-                    
-                    1. TIPO DE ESPACIO: ¿Es oficina, hogar, retail?
-                    2. ZONAS CLAVE: Identifica las 3 áreas de mayor importancia.
-                    3. ESTRATEGIA DE SEMBRADO: Recomienda puntualmente dónde colocar los difusores de aroma y por qué.
-                    
-                    Responde en español, formato ejecutivo.
+                    Actúa como un experto consultor en Marketing Olfativo de Aromatex.
+                    Analiza el plano arquitectónico adjunto.
+
+                    TAREA 1: ANÁLISIS ESTRATÉGICO (Breve)
+                    - Tipo de espacio y objetivo olfativo principal.
+
+                    TAREA 2: LISTA DE SEMBRADO SUGERIDO
+                    - Proporciona una lista de 3 a 5 puntos EXACTOS donde sugieres colocar equipos.
+                    - Para cada punto, dame una descripción VISUAL muy clara de dónde debo hacer clic en el mapa.
+                    - Usa este formato exacto para la lista:
+                    📍 PUNTO [Número]: [Descripción visual clara de la ubicación] - [Justificación breve]
+
+                    Ejemplo:
+                    📍 PUNTO 1: En el centro del acceso principal, justo al cruzar la reja. - Para captar tráfico de entrada.
                     """
                     
                     response = model.generate_content([prompt, st.session_state['base_image']])
-                    st.session_state['analisis_ia'] = response.text
+                    full_text = response.text
+
+                    # Separamos el análisis general de los puntos sugeridos (truco simple)
+                    parts = full_text.split("TAREA 2: LISTA DE SEMBRADO SUGERIDO")
+                    
+                    st.session_state['analisis_ia'] = parts[0] if len(parts) > 0 else full_text
+                    st.session_state['sugerencias_puntos'] = parts[1] if len(parts) > 1 else "No se generaron puntos específicos."
                     st.rerun()
                     
             except Exception as e:
@@ -140,46 +162,63 @@ if uploaded_file:
         st.session_state['file_id'] = fid
         st.session_state['puntos'] = [] 
         st.session_state['analisis_ia'] = ""
+        st.session_state['sugerencias_puntos'] = ""
         st.rerun()
 
 if st.session_state['base_image']:
     
-    # 1. RESULTADO IA
-    if st.session_state['analisis_ia']:
-        st.success("✅ Análisis Completado")
-        with st.expander("📄 Ver Estrategia Recomendada", expanded=True):
-            st.markdown(st.session_state['analisis_ia'])
-        st.divider()
+    # --- DISEÑO DE DOS COLUMNAS ---
+    col_ia, col_mapa = st.columns([1, 2])
 
-    # 2. VISUALIZADOR
-    display_img = st.session_state['base_image'].copy()
-    draw = ImageDraw.Draw(display_img, "RGBA")
-    
-    for p in st.session_state['puntos']:
-        x, y = p['x'], p['y']
-        r = p['radio']
-        draw.ellipse((x-r, y-r, x+r, y+r), outline=p['color'], width=3)
-        draw.ellipse((x-5, y-5, x+5, y+5), fill="white", outline="black")
+    # --- COLUMNA IZQUIERDA: SUGERENCIAS DE LA IA ---
+    with col_ia:
+        st.subheader("🧠 Sugerencias de la IA")
+        if st.session_state['sugerencias_puntos']:
+            st.info("Lee las sugerencias y haz clic en el mapa para 'palomearlas'.")
+            
+            # Limpiamos y mostramos las sugerencias como una lista visual
+            sugerencias = st.session_state['sugerencias_puntos'].strip().split('\n')
+            for linea in sugerencias:
+                if "📍" in linea:
+                    st.markdown(f"""<div class="sugerencia-ia">{linea}</div>""", unsafe_allow_html=True)
+            
+            with st.expander("Ver Análisis Estratégico Completo"):
+                 st.markdown(st.session_state['analisis_ia'])
+        else:
+            st.write("Presiona '✨ Analizar y Sugerir Puntos' en la barra lateral para recibir instrucciones de sembrado.")
+            st.metric("Equipos Colocados por ti", len(st.session_state['puntos']))
 
-    st.write("### 📍 Haz clic en el mapa para colocar equipos")
-    
-    value = streamlit_image_coordinates(
-        display_img,
-        key="sembrado_click"
-    )
-    
-    if value is not None:
-        new_point = {"x": value["x"], "y": value["y"], "color": color, "radio": radio_px}
-        if not st.session_state['puntos'] or st.session_state['puntos'][-1]['x'] != new_point['x']:
-            st.session_state['puntos'].append(new_point)
-            st.rerun()
+    # --- COLUMNA DERECHA: EL MAPA INTERACTIVO ---
+    with col_mapa:
+        st.subheader("📍 Tu Sembrado (Haz Clic)")
+        
+        # VISUALIZADOR
+        display_img = st.session_state['base_image'].copy()
+        draw = ImageDraw.Draw(display_img, "RGBA")
+        
+        for p in st.session_state['puntos']:
+            x, y = p['x'], p['y']
+            r = p['radio']
+            draw.ellipse((x-r, y-r, x+r, y+r), outline=p['color'], width=3)
+            draw.ellipse((x-5, y-5, x+5, y+5), fill="white", outline="black")
+        
+        # COMPONENTE DE CLIC
+        value = streamlit_image_coordinates(
+            display_img,
+            key="sembrado_click",
+            width=700 # Hacemos el mapa un poco más grande
+        )
+        
+        if value is not None:
+            new_point = {"x": value["x"], "y": value["y"], "color": color, "radio": radio_px}
+            if not st.session_state['puntos'] or st.session_state['puntos'][-1]['x'] != new_point['x']:
+                st.session_state['puntos'].append(new_point)
+                st.rerun()
 
     # 3. EXPORTAR
     if st.session_state['puntos']:
         st.divider()
-        st.metric("Equipos Colocados", len(st.session_state['puntos']))
-        
-        if st.button("📸 Generar Imagen Final"):
+        if st.button("📸 Generar Imagen Final de Propuesta"):
             buf = io.BytesIO()
             fig, ax = plt.subplots(figsize=(10, 10 * display_img.height / display_img.width))
             ax.imshow(st.session_state['base_image'])
