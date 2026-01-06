@@ -15,7 +15,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🌱 Aromatex: Sembrado con Gemini 2.0")
+st.title("🌱 Aromatex: Sembrado con Gemini 1.5")
 
 # --- ESTADO ---
 if 'puntos' not in st.session_state: st.session_state['puntos'] = []
@@ -39,7 +39,7 @@ def process_file(uploaded_file):
         else:
             image = Image.open(uploaded_file)
 
-        # APLANAR A BLANCO (Vital)
+        # APLANAR A BLANCO
         image = image.convert("RGBA")
         background = Image.new("RGBA", image.size, (255, 255, 255, 255))
         image = Image.alpha_composite(background, image).convert("RGB")
@@ -99,29 +99,29 @@ with st.sidebar:
     
     api_key = st.text_input("Google API Key:", type="password")
     
-    if st.button("✨ Analizar Plano (Gemini 2.0)"):
+    if st.button("✨ Analizar Plano (Gemini 1.5)"):
         if not api_key:
             st.error("⚠️ Falta la API Key")
         elif not st.session_state['base_image']:
             st.warning("⚠️ Primero sube un plano")
         else:
             try:
-                with st.spinner("Gemini 2.0 está analizando tu plano..."):
+                with st.spinner("Gemini 1.5 Flash está analizando tu plano..."):
                     genai.configure(api_key=api_key)
                     
-                    # --- AQUÍ ESTÁ EL CAMBIO ---
-                    # Usamos uno de los modelos que confirmaste que tienes en tu lista
-                    model = genai.GenerativeModel('gemini-2.0-flash')
+                    # --- CAMBIO: Usamos el modelo estable 1.5 ---
+                    # Este modelo es muy generoso con la capa gratuita
+                    model = genai.GenerativeModel('gemini-1.5-flash')
                     
                     prompt = """
                     Actúa como un experto consultor en Marketing Olfativo para la empresa Aromatex.
                     Analiza este plano arquitectónico adjunto visualmente.
                     
-                    1. CLASIFICACIÓN: ¿Qué tipo de inmueble es? (Oficina, Retail, Casa, etc.)
-                    2. ZONAS CALIENTES: Identifica las 3 zonas de mayor flujo de personas o permanencia.
-                    3. ESTRATEGIA: Recomienda puntualmente dónde colocar los difusores de aroma para cubrir esas zonas sin desperdiciar aroma en pasillos muertos.
+                    1. CLASIFICACIÓN: ¿Qué tipo de inmueble es?
+                    2. ZONAS CALIENTES: Identifica las 3 zonas de mayor flujo.
+                    3. ESTRATEGIA: Recomienda dónde colocar difusores de aroma.
                     
-                    Responde en español, sé directo y profesional.
+                    Responde en español, sé directo.
                     """
                     
                     response = model.generate_content([prompt, st.session_state['base_image']])
