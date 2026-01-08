@@ -8,7 +8,7 @@ import google.generativeai as genai
 from streamlit_image_coordinates import streamlit_image_coordinates
 import math
 
-# --- NUEVAS LIBRERÍAS PARA PDF ---
+# --- LIBRERÍAS PARA PDF ---
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image as RLImage
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.pagesizes import A4
@@ -23,14 +23,14 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🌱 Aromatex: Sembrado Profesional V35")
+st.title("🌱 Aromatex: Sembrado Profesional V38 (Gemini 2.0)")
 
 # --- ESTADO ---
 if 'puntos' not in st.session_state: st.session_state['puntos'] = []
 if 'scale_px_per_meter' not in st.session_state: st.session_state['scale_px_per_meter'] = 35.0
 if 'base_image' not in st.session_state: st.session_state['base_image'] = None
 if 'file_id' not in st.session_state: st.session_state['file_id'] = ""
-if 'analisis_ia' not in st.session_state: st.session_state['analisis_ia'] = "" # Guardaremos el texto aquí
+if 'analisis_ia' not in st.session_state: st.session_state['analisis_ia'] = "" 
 if 'calibracion_clicks' not in st.session_state: st.session_state['calibracion_clicks'] = []
 
 # --- PROCESAMIENTO ---
@@ -62,7 +62,6 @@ def process_file(uploaded_file):
 
 # --- FUNCION GENERAR PDF ---
 def generar_pdf(imagen_base, puntos, texto_ia, escala_px):
-    # 1. Crear imagen con matplotlib
     img_buffer = io.BytesIO()
     fig, ax = plt.subplots(figsize=(10, 10 * imagen_base.height / imagen_base.width))
     ax.imshow(imagen_base)
@@ -73,7 +72,6 @@ def generar_pdf(imagen_base, puntos, texto_ia, escala_px):
         ax.add_patch(c)
         ax.add_patch(patches.Circle((p['x'], p['y']), 5, color="white"))
         
-    # Testigo de escala visual
     rect = patches.Rectangle((30, imagen_base.height - 40), escala_px, 5, color='red')
     ax.add_patch(rect)
     ax.text(30, imagen_base.height - 50, '1 Metro', color='red', fontsize=12, backgroundcolor='white')
@@ -81,7 +79,6 @@ def generar_pdf(imagen_base, puntos, texto_ia, escala_px):
     plt.savefig(img_buffer, format="png", bbox_inches='tight', pad_inches=0, dpi=150)
     img_buffer.seek(0)
 
-    # 2. Documento ReportLab
     pdf_buffer = io.BytesIO()
     doc = SimpleDocTemplate(pdf_buffer, pagesize=A4, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
     styles = getSampleStyleSheet()
@@ -123,14 +120,12 @@ def generar_pdf(imagen_base, puntos, texto_ia, escala_px):
 with st.sidebar:
     st.header("⚙️ Configuración")
     
-    # --- INPUTS DE DATOS (IMPORTANTE PARA EVITAR EL ERROR) ---
     st.subheader("📋 Datos del Local")
     area_total = st.number_input("Área (m²):", value=100)
     altura = st.number_input("Altura (m):", value=3.0)
     
     st.divider()
 
-    # --- API KEY ---
     api_key = None
     if "GOOGLE_API_KEY" in st.secrets:
         api_key = st.secrets["GOOGLE_API_KEY"]
@@ -140,7 +135,6 @@ with st.sidebar:
 
     st.divider()
     
-    # --- ESCALA ---
     st.subheader("🔍 Escala")
     col1, col2 = st.columns(2)
     if col1.button("🛍️ Retail"): st.session_state['scale_px_per_meter'] = 55.0; st.rerun()
@@ -153,13 +147,11 @@ with st.sidebar:
     
     st.divider()
 
-    # --- MODOS ---
     modo = st.radio("Herramienta:", ["📍 Sembrar Equipos", "📏 Calibrar Escala"])
 
     if modo == "📍 Sembrar Equipos":
         tipo = st.selectbox("Modelo", ["Home Pro (100 m²)", "Advance Pro (300 m²)", "Extreme (800 m²)"])
         
-        # Definir propiedades según selección
         if "Home" in tipo:
             color, radio_real = "#2E8B57", 5.6
         elif "Advance" in tipo:
@@ -199,7 +191,7 @@ if uploaded_file:
         st.session_state['file_id'] = fid
         st.session_state['puntos'] = []
         st.session_state['calibracion_clicks'] = []
-        st.session_state['analisis_ia'] = "" # Reset análisis al cambiar imagen
+        st.session_state['analisis_ia'] = "" 
         st.rerun()
 
 if st.session_state['base_image']:
@@ -208,16 +200,29 @@ if st.session_state['base_image']:
     if api_key and modo == "📍 Sembrar Equipos":
         if st.button("✨ Analizar con Gemini"):
             try:
-                with st.spinner("Gemini está pensando..."):
+                with st.spinner("Consultando a Gemini 2.0..."):
                     genai.configure(api_key=api_key)
-                    model = genai.GenerativeModel('gemini-1.5-flash')
-                    # AQUI YA FUNCIONAN LAS VARIABLES PORQUE ESTAN EN EL SIDEBAR
+                    
+                    # --- SELECCIÓN ROBUSTA DE MODELO ---
+                    # Intentamos usar el 2.0 que es el más reciente disponible
+                    try:
+                        model = genai.GenerativeModel('gemini-2.0-flash')
+                        st.toast("Usando modelo: Gemini 2.0 Flash")
+                    except:
+                        try:
+                            model = genai.GenerativeModel('gemini-flash-latest')
+                            st.toast("Usando modelo: Flash Latest")
+                        except:
+                            model = genai.GenerativeModel('gemini-1.5-flash-latest')
+                            st.toast("Usando modelo: 1.5 Flash Latest")
+
                     prompt = f"""
                     Actúa como experto en Marketing Olfativo.
                     Datos técnicos: Local de {area_total} m² con altura de {altura} m.
                     Analiza el plano visualmente. Dame 3 puntos estratégicos para difusores.
                     Sé breve y profesional.
                     """
+                    
                     response = model.generate_content([prompt, st.session_state['base_image']])
                     st.session_state['analisis_ia'] = response.text
                     st.rerun()
@@ -250,7 +255,6 @@ if st.session_state['base_image']:
     if value:
         x, y = value["x"], value["y"]
         if modo == "📍 Sembrar Equipos":
-            # Verificar duplicados por rerun
             if not st.session_state['puntos'] or st.session_state['puntos'][-1]['x'] != x:
                 new_point = {"x": x, "y": y, "color": color, "radio": radio_px}
                 st.session_state['puntos'].append(new_point)
@@ -266,7 +270,6 @@ if st.session_state['base_image']:
         st.divider()
         st.success(f"Listo para exportar con {len(st.session_state['puntos'])} equipos.")
         
-        # Generamos el PDF usando la función nueva
         pdf_bytes = generar_pdf(
             st.session_state['base_image'], 
             st.session_state['puntos'], 
@@ -274,11 +277,9 @@ if st.session_state['base_image']:
             st.session_state['scale_px_per_meter']
         )
         
-        col_d1, col_d2 = st.columns(2)
-        with col_d1:
-            st.download_button(
-                label="📄 Descargar Reporte PDF",
-                data=pdf_bytes,
-                file_name="propuesta_aromatex.pdf",
-                mime="application/pdf"
-            )
+        st.download_button(
+            label="📄 Descargar Reporte PDF",
+            data=pdf_bytes,
+            file_name="propuesta_aromatex.pdf",
+            mime="application/pdf"
+        )
