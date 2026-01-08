@@ -23,7 +23,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🌱 Aromatex: Sembrado Profesional V39")
+st.title("🌱 Aromatex: Sembrado Profesional V41")
 
 # --- ESTADO (SESSION STATE) ---
 if 'puntos' not in st.session_state: st.session_state['puntos'] = []
@@ -46,12 +46,10 @@ def process_file(uploaded_file):
         else:
             image = Image.open(uploaded_file)
 
-        # Convertir a RGB seguro
         image = image.convert("RGBA")
         background = Image.new("RGBA", image.size, (255, 255, 255, 255))
         image = Image.alpha_composite(background, image).convert("RGB")
 
-        # Redimensionar si es gigante (optimización)
         target_width = 1000
         if image.width > target_width:
             ratio = target_width / float(image.width)
@@ -64,7 +62,6 @@ def process_file(uploaded_file):
 
 # --- FUNCIÓN GENERAR PDF ---
 def generar_pdf(imagen_base, puntos, texto_ia, escala_px):
-    # 1. Matplotlib para el plano
     img_buffer = io.BytesIO()
     fig, ax = plt.subplots(figsize=(10, 10 * imagen_base.height / imagen_base.width))
     ax.imshow(imagen_base)
@@ -82,12 +79,12 @@ def generar_pdf(imagen_base, puntos, texto_ia, escala_px):
     plt.savefig(img_buffer, format="png", bbox_inches='tight', pad_inches=0, dpi=150)
     img_buffer.seek(0)
 
-    # 2. ReportLab para el PDF final
     pdf_buffer = io.BytesIO()
     doc = SimpleDocTemplate(pdf_buffer, pagesize=A4, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
     styles = getSampleStyleSheet()
     
-    estilo_titulo = ParagraphStyle('TituloAromatex', parent=styles['Heading1'], textColor=colors.hexval("#6366f1"), spaceAfter=20)
+    # Uso correcto de colores Hex
+    estilo_titulo = ParagraphStyle('TituloAromatex', parent=styles['Heading1'], textColor=colors.HexColor("#6366f1"), spaceAfter=20)
     estilo_texto = ParagraphStyle('TextoIA', parent=styles['Normal'], fontSize=10, leading=14)
 
     story = []
@@ -126,10 +123,11 @@ with st.sidebar:
     
     st.subheader("📋 Datos del Local")
     area_total = st.number_input("Área (m²):", value=100)
-    altura = st.number_input("Altura (m):", value=3.0)
+    # Altura por defecto 3.10 para coincidir con spec de Advance Pro
+    altura = st.number_input("Altura (m):", value=3.10, step=0.10)
     st.divider()
 
-    # --- API KEY (MANEJO DE ERRORES) ---
+    # --- API KEY ---
     api_key = None
     if "GOOGLE_API_KEY" in st.secrets:
         api_key = st.secrets["GOOGLE_API_KEY"]
@@ -156,17 +154,41 @@ with st.sidebar:
     modo = st.radio("Herramienta:", ["📍 Sembrar Equipos", "📏 Calibrar Escala"])
 
     if modo == "📍 Sembrar Equipos":
-        tipo = st.selectbox("Modelo", ["Home Pro (100 m²)", "Advance Pro (300 m²)", "Extreme (800 m²)"])
+        # --- NUEVA LISTA DE MODELOS ---
+        tipo = st.selectbox("Modelo", [
+            "Advance Pro (100 m²)", 
+            "Plus Pro (150-200 m²)", 
+            "Extreme (500 m²)"
+        ])
         
-        if "Home" in tipo:
-            color, radio_real = "#2E8B57", 5.6
-        elif "Advance" in tipo:
-            color, radio_real = "#FF8C00", 9.7
-        else:
-            color, radio_real = "#DC143C", 16.0
+        # --- LÓGICA DE VOLUMEN (M3) ---
+        # Advance: 100m2 * 3.1m = 310 m3
+        # Plus: 200m2 * 3.0m = 600 m3 (Max performance)
+        # Extreme: 500m2 * 3.0m = 1500 m3
         
-        radio_px = int(radio_real * st.session_state['scale_px_per_meter'])
-        st.caption(f"Radio visual: {radio_px} px")
+        volumen_m3 = 0
+        color = "#000000"
+        
+        if "Advance" in tipo:
+            volumen_m3 = 310
+            color = "#2E8B57" # Verde
+        elif "Plus" in tipo:
+            volumen_m3 = 600
+            color = "#FF8C00" # Naranja
+        elif "Extreme" in tipo:
+            volumen_m3 = 1500
+            color = "#DC143C" # Rojo
+            
+        # Cálculo del radio dinámico: Area = Vol / Altura -> Radio = sqrt(Area/pi)
+        # Protegemos división por cero
+        h_calc = altura if altura > 0 else 3.0
+        area_efectiva = volumen_m3 / h_calc
+        radio_real_mts = math.sqrt(area_efectiva / math.pi)
+        
+        radio_px = int(radio_real_mts * st.session_state['scale_px_per_meter'])
+        
+        st.caption(f"📏 Radio Dinámico: **{radio_real_mts:.2f} m**")
+        st.caption(f"🧊 Volumen Capacidad: **{volumen_m3} m³**")
         
         c1, c2 = st.columns(2)
         if c1.button("↩️ Deshacer"):
@@ -177,7 +199,7 @@ with st.sidebar:
             st.session_state['puntos'] = []
             st.rerun()
     else:
-        st.info("Clic en 2 puntos de referencia (ej: puerta).")
+        st.info("Clic en 2 puntos de referencia.")
         if len(st.session_state['calibracion_clicks']) == 2:
             p1 = st.session_state['calibracion_clicks'][0]
             p2 = st.session_state['calibracion_clicks'][1]
@@ -191,7 +213,6 @@ with st.sidebar:
                     st.rerun()
 
 # --- ÁREA PRINCIPAL ---
-# Usamos key="loader" para que no se resetee el input al hacer rerun
 uploaded_file = st.file_uploader("Sube plano (PDF, JPG)", type=["pdf", "jpg", "png"], key="loader")
 
 if uploaded_file:
@@ -204,20 +225,17 @@ if uploaded_file:
         st.session_state['analisis_ia'] = "" 
         st.rerun()
 
-# --- LÓGICA DE DIBUJO Y RENDERIZADO (SEPARADA) ---
+# --- LÓGICA DE DIBUJO ---
 if st.session_state['base_image']:
 
-    # 1. SECCIÓN IA (Arriba del mapa)
+    # 1. SECCIÓN IA
     if api_key and modo == "📍 Sembrar Equipos":
         col_ia_btn, col_ia_txt = st.columns([1, 3])
-        
         with col_ia_btn:
             if st.button("✨ Analizar (Gemini)"):
                 try:
                     with st.spinner("Pensando..."):
                         genai.configure(api_key=api_key)
-                        
-                        # Intento robusto de selección de modelo
                         try:
                             model = genai.GenerativeModel('gemini-2.0-flash')
                         except:
@@ -228,16 +246,14 @@ if st.session_state['base_image']:
 
                         prompt = f"""
                         Eres experto en Marketing Olfativo. Local de {area_total} m2, altura {altura}m.
-                        Analiza la imagen. Recomienda 3 zonas estratégicas para difusores de aroma.
+                        Analiza la imagen. Recomienda 3 zonas estratégicas para difusores.
                         Responde en español, breve y con bullet points.
                         """
                         response = model.generate_content([prompt, st.session_state['base_image']])
                         st.session_state['analisis_ia'] = response.text
-                        st.rerun() # Recarga para mostrar resultado
-                        
+                        st.rerun()
                 except Exception as e:
                     st.error(f"Error IA: {str(e)}")
-                    # Importante: No hacemos rerun si hay error para poder leerlo
         
         with col_ia_txt:
             if st.session_state['analisis_ia']:
@@ -245,63 +261,47 @@ if st.session_state['base_image']:
 
     st.divider()
 
-    # 2. SECCIÓN MAPA (Siempre se ejecuta si existe la imagen)
-    # Crear copia para dibujar (no modificamos la original)
+    # 2. SECCIÓN MAPA
     display_img = st.session_state['base_image'].copy()
     draw = ImageDraw.Draw(display_img, "RGBA")
     
-    # Dibujar puntos existentes
     for p in st.session_state['puntos']:
         x, y, r, c = p['x'], p['y'], p['radio'], p['color']
-        # Radio de cobertura
         draw.ellipse((x-r, y-r, x+r, y+r), outline=c, width=4)
-        # Punto central
         draw.ellipse((x-5, y-5, x+5, y+5), fill=c, outline="white")
 
-    # Dibujar línea de calibración
     clicks = st.session_state['calibracion_clicks']
     for p in clicks:
         draw.ellipse((p['x']-5, p['y']-5, p['x']+5, p['y']+5), fill="blue")
     if len(clicks) == 2:
         draw.line([(clicks[0]['x'], clicks[0]['y']), (clicks[1]['x'], clicks[1]['y'])], fill="blue", width=3)
 
-    # RENDERIZAR IMAGEN CLICKEABLE
-    # Esta función es la que muestra el mapa. Si el script fallara antes, esto no saldría.
     value = streamlit_image_coordinates(display_img, key="mapa_interactivo")
     
-    # Lógica de clicks
     if value:
         x, y = value["x"], value["y"]
-        
         if modo == "📍 Sembrar Equipos":
-            # Evitar doble click fantasma verificando el último punto
+            # Usar variables calculadas arriba (radio_px, color)
             same_point = False
             if st.session_state['puntos']:
                 last = st.session_state['puntos'][-1]
                 if abs(last['x'] - x) < 5 and abs(last['y'] - y) < 5:
                     same_point = True
-            
             if not same_point:
-                st.session_state['puntos'].append({
-                    "x": x, "y": y, 
-                    "color": color, 
-                    "radio": radio_px
-                })
+                st.session_state['puntos'].append({"x": x, "y": y, "color": color, "radio": radio_px})
                 st.rerun()
-
         elif modo == "📏 Calibrar Escala":
             if len(clicks) < 2:
-                # Evitar repetidos
                 if not clicks or (abs(clicks[-1]['x'] - x) > 5):
                     st.session_state['calibracion_clicks'].append({"x": x, "y": y})
                     st.rerun()
 
-    # 3. SECCIÓN DESCARGA (Solo si hay equipos)
+    # 3. SECCIÓN DESCARGA
     if st.session_state['puntos'] and modo == "📍 Sembrar Equipos":
         st.divider()
         col_res, col_down = st.columns([2, 1])
         with col_res:
-            st.success(f"✅ Proyecto listo: {len(st.session_state['puntos'])} equipos sembrados.")
+            st.success(f"✅ Proyecto listo: {len(st.session_state['puntos'])} equipos.")
         with col_down:
             pdf_data = generar_pdf(
                 st.session_state['base_image'],
