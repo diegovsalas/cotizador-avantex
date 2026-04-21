@@ -17,32 +17,49 @@ from reportlab.lib import colors
 # =========================================================
 # CATÁLOGO OFICIAL AROMATEX
 # Fuente: https://aromatex.mx/collections/difusores-inteligentes
-# NOTA: Las coberturas son "máximas ideales" del fabricante
-# asumiendo altura estándar 3m y espacio abierto.
-# Ajustar por "factor_espacio" cuando haya obstrucciones.
+#
+# DOBLE DIMENSIÓN (2D + 3D):
+# - cobertura_m2: para dibujar círculos en el plano (vista superior)
+# - altura_asumida_m: altura típica comercial asumida por fabricante
+# - cobertura_m3 = cobertura_m2 × altura_asumida_m (volumen efectivo)
+#
+# NOTA IMPORTANTE: La ficha técnica internacional del Advance Pro
+# indica 4,000 sq ft (372 m²). La web MX dice 300 m². Dejamos 300
+# como valor conservador. Si tu área técnica confirma el dato de
+# 372 m², actualiza el valor aquí.
 # =========================================================
+ALTURA_ASUMIDA_FABRICANTE = 3.0  # m — estándar comercial
+
 CATALOGO = {
     "Home Pro": {
         "cobertura_m2": 100,
-        "color": "#3B82F6",       # Azul
+        "altura_asumida_m": ALTURA_ASUMIDA_FABRICANTE,
+        "cobertura_m3": 100 * ALTURA_ASUMIDA_FABRICANTE,  # 300 m³
+        "color": "#3B82F6",
         "capacidad_ml": 250,
-        "descripcion": "Ideal para baños, oficinas chicas, recepciones",
+        "descripcion": "Baños, oficinas chicas, recepciones",
     },
     "Advance Pro": {
         "cobertura_m2": 300,
-        "color": "#10B981",       # Verde esmeralda (match QBR Aromatex)
+        "altura_asumida_m": ALTURA_ASUMIDA_FABRICANTE,
+        "cobertura_m3": 300 * ALTURA_ASUMIDA_FABRICANTE,  # 900 m³
+        "color": "#10B981",
         "capacidad_ml": 800,
         "descripcion": "Retail mediano, showrooms, pasillos comerciales",
     },
     "Plus Pro": {
         "cobertura_m2": 500,
-        "color": "#F59E0B",       # Ámbar
+        "altura_asumida_m": ALTURA_ASUMIDA_FABRICANTE,
+        "cobertura_m3": 500 * ALTURA_ASUMIDA_FABRICANTE,  # 1,500 m³
+        "color": "#F59E0B",
         "capacidad_ml": 800,
         "descripcion": "Salones amplios, grandes áreas comerciales",
     },
     "Extreme Pro": {
-        "cobertura_m2": 800,      # [CONFIRMAR con ficha técnica interna]
-        "color": "#EF4444",       # Rojo
+        "cobertura_m2": 800,  # [CONFIRMAR con ficha técnica interna]
+        "altura_asumida_m": ALTURA_ASUMIDA_FABRICANTE,
+        "cobertura_m3": 800 * ALTURA_ASUMIDA_FABRICANTE,  # 2,400 m³
+        "color": "#EF4444",
         "capacidad_ml": 1000,
         "descripcion": "Centros comerciales, lobbies, auditorios",
     },
@@ -56,7 +73,6 @@ FACTORES_ESPACIO = {
     "Restaurante (aromas de cocina)": 0.60,
     "Hotel / Lobby": 0.90,
     "Espacio con HVAC (ducto)": 1.15,
-    "Techos altos (>3.5m)": 0.70,
 }
 
 # --- CONFIGURACIÓN DE PÁGINA ---
@@ -261,17 +277,24 @@ def generar_pdf(imagen_base, puntos, texto_ia, escala_px, area_total, factor_esp
     # Tabla resumen de equipos
     if resumen:
         story.append(Paragraph("<b>Resumen de Equipos:</b>", styles['Heading3']))
-        data = [["Modelo", "Cantidad", "Cobertura c/u", "Cobertura total"]]
+        data = [["Modelo", "Cant.", "Cob. 2D c/u", "Cob. 3D c/u", "Cob. total 2D", "Cob. total 3D"]]
         for modelo, info in resumen.items():
-            data.append([modelo, str(info["cantidad"]), f"{info['cobertura_unit']:.0f} m²", f"{info['cobertura_total']:.0f} m²"])
-        t = Table(data, colWidths=[120, 60, 90, 100])
+            data.append([
+                modelo,
+                str(info["cantidad"]),
+                f"{info['cobertura_unit_m2']:.0f} m²",
+                f"{info['cobertura_unit_m3']:.0f} m³",
+                f"{info['cobertura_total_m2']:.0f} m²",
+                f"{info['cobertura_total_m3']:.0f} m³",
+            ])
+        t = Table(data, colWidths=[90, 35, 70, 70, 80, 80])
         t.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#10B981")),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
             ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
             ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
             ('ALIGN', (1, 0), (-1, -1), 'CENTER'),
-            ('FONTSIZE', (0, 0), (-1, -1), 9),
+            ('FONTSIZE', (0, 0), (-1, -1), 8),
         ]))
         story.append(t)
         story.append(Spacer(1, 20))
@@ -299,16 +322,35 @@ with st.sidebar:
 
     st.subheader("📋 Datos del Local")
     area_total = st.number_input("Área declarada (m²):", value=100, min_value=1)
-    altura = st.number_input("Altura (m):", value=3.00, step=0.10, min_value=2.0)
+    altura = st.number_input("Altura del techo (m):", value=3.00, step=0.10, min_value=2.0)
+
+    # Altura de instalación del equipo (clave para cálculo 3D)
+    altura_instalacion = st.number_input(
+        "Altura de instalación del difusor (m):",
+        value=min(2.5, altura - 0.3),
+        min_value=1.0,
+        max_value=float(altura),
+        step=0.1,
+        help="Altura a la que se monta el equipo (plafón, pared, mostrador...)"
+    )
 
     tipo_espacio = st.selectbox("Tipo de espacio:", list(FACTORES_ESPACIO.keys()))
     factor = FACTORES_ESPACIO[tipo_espacio]
 
-    if altura > 3.5:
-        factor = min(factor, FACTORES_ESPACIO["Techos altos (>3.5m)"])
-        st.warning(f"⚠️ Techo alto detectado. Factor ajustado: {factor:.2f}")
-    else:
-        st.caption(f"📊 Factor aplicado: **{factor:.2f}**")
+    # Factor por instalación baja en techo alto
+    factor_instalacion = 1.0
+    if altura_instalacion < 2.0 and altura > 4.0:
+        factor_instalacion = 0.85
+        st.warning(f"⚠️ Instalación baja ({altura_instalacion}m) en techo alto ({altura}m). Factor: 0.85")
+    elif altura > 3.5:
+        st.info(f"ℹ️ Techo alto detectado ({altura}m). Se calculará por volumen.")
+
+    factor_total = factor * factor_instalacion
+    st.caption(f"📊 Factor espacio: {factor:.2f} · Factor instalación: {factor_instalacion:.2f} · **Total: {factor_total:.2f}**")
+
+    # Volumen del espacio (clave para cálculo 3D)
+    volumen_espacio = area_total * altura
+    st.caption(f"📦 Volumen del espacio: **{volumen_espacio:.0f} m³**")
 
     st.divider()
 
@@ -342,12 +384,13 @@ with st.sidebar:
         tipo = st.selectbox("Modelo", list(CATALOGO.keys()))
         info_modelo = CATALOGO[tipo]
 
-        cobertura_m2_real = cobertura_ajustada(tipo, factor)
+        cobertura_m2_real = cobertura_ajustada(tipo, factor_total)
+        cobertura_m3_real = info_modelo["cobertura_m3"] * factor_total
         color = info_modelo["color"]
         radio_px = calcular_radio_px(cobertura_m2_real, st.session_state['scale_px_per_meter'])
 
-        st.caption(f"📐 Cobertura oficial: **{info_modelo['cobertura_m2']} m²**")
-        st.caption(f"📏 Cobertura ajustada: **{cobertura_m2_real:.0f} m²**")
+        st.caption(f"📐 Cobertura 2D: **{cobertura_m2_real:.0f} m²** (oficial: {info_modelo['cobertura_m2']} m²)")
+        st.caption(f"📦 Cobertura 3D: **{cobertura_m3_real:.0f} m³** (a {info_modelo['altura_asumida_m']}m altura asumida)")
         st.caption(f"💧 Capacidad: **{info_modelo['capacidad_ml']} ml**")
         st.info(info_modelo["descripcion"])
 
@@ -608,6 +651,7 @@ if st.session_state['base_image']:
                     "radio": radio_px,
                     "modelo": tipo,
                     "cobertura_m2": cobertura_m2_real,
+                    "cobertura_m3": cobertura_m3_real,
                 })
                 st.rerun()
         elif modo == "📏 Calibrar Escala":
@@ -624,36 +668,89 @@ if st.session_state['base_image']:
         resumen = {}
         for p in st.session_state['puntos']:
             m = p.get("modelo", "Desconocido")
-            cov = p.get("cobertura_m2", 0)
+            cov_m2 = p.get("cobertura_m2", 0)
+            cov_m3 = p.get("cobertura_m3", 0)
             if m not in resumen:
-                resumen[m] = {"cantidad": 0, "cobertura_unit": cov, "cobertura_total": 0}
+                resumen[m] = {
+                    "cantidad": 0,
+                    "cobertura_unit_m2": cov_m2,
+                    "cobertura_unit_m3": cov_m3,
+                    "cobertura_total_m2": 0,
+                    "cobertura_total_m3": 0,
+                }
             resumen[m]["cantidad"] += 1
-            resumen[m]["cobertura_total"] += cov
+            resumen[m]["cobertura_total_m2"] += cov_m2
+            resumen[m]["cobertura_total_m3"] += cov_m3
 
-        cobertura_total_sembrada = sum(r["cobertura_total"] for r in resumen.values())
-        pct_cobertura = (cobertura_total_sembrada / area_total * 100) if area_total else 0
+        cob_total_m2 = sum(r["cobertura_total_m2"] for r in resumen.values())
+        cob_total_m3 = sum(r["cobertura_total_m3"] for r in resumen.values())
 
-        st.subheader("📊 Validador de Coherencia")
-        col_a, col_b, col_c = st.columns(3)
-        col_a.metric("Área declarada", f"{area_total} m²")
-        col_b.metric("Cobertura sembrada", f"{cobertura_total_sembrada:.0f} m²")
-        col_c.metric("% Cobertura", f"{pct_cobertura:.0f}%")
+        pct_2d = (cob_total_m2 / area_total * 100) if area_total else 0
+        pct_3d = (cob_total_m3 / volumen_espacio * 100) if volumen_espacio else 0
 
-        # Alertas inteligentes
-        if pct_cobertura < 80:
-            st.warning(f"⚠️ **Sub-dimensionado**: faltan ~{area_total - cobertura_total_sembrada:.0f} m² por cubrir.")
-        elif pct_cobertura > 150:
-            st.error(f"🚨 **Sobre-dimensionado**: estás {pct_cobertura - 100:.0f}% arriba del área. Probable desperdicio.")
-        elif 80 <= pct_cobertura <= 120:
-            st.success(f"✅ **Cobertura óptima** ({pct_cobertura:.0f}% del área declarada).")
-        else:
-            st.info(f"ℹ️ Cobertura al {pct_cobertura:.0f}% — aceptable con margen.")
+        st.subheader("📊 Validador de Coherencia Dual (2D + 3D)")
 
-        # Tabla resumen
+        # Dos columnas: área vs volumen
+        col_2d, col_3d = st.columns(2)
+
+        with col_2d:
+            st.markdown("### 📐 Cobertura 2D (Área)")
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Área local", f"{area_total} m²")
+            c2.metric("Sembrado", f"{cob_total_m2:.0f} m²")
+            c3.metric("Cobertura", f"{pct_2d:.0f}%")
+
+            if pct_2d < 80:
+                st.warning(f"⚠️ Área sub-cubierta: faltan {area_total - cob_total_m2:.0f} m²")
+            elif pct_2d > 150:
+                st.error(f"🚨 Sobre-dimensionado en área: +{pct_2d - 100:.0f}%")
+            else:
+                st.success(f"✅ Área OK ({pct_2d:.0f}%)")
+
+        with col_3d:
+            st.markdown("### 📦 Cobertura 3D (Volumen)")
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Volumen", f"{volumen_espacio:.0f} m³")
+            c2.metric("Sembrado", f"{cob_total_m3:.0f} m³")
+            c3.metric("Cobertura", f"{pct_3d:.0f}%")
+
+            if pct_3d < 80:
+                deficit_m3 = volumen_espacio - cob_total_m3
+                st.warning(f"⚠️ Volumen sub-cubierto: faltan {deficit_m3:.0f} m³")
+            elif pct_3d > 150:
+                st.error(f"🚨 Sobre-dimensionado en volumen: +{pct_3d - 100:.0f}%")
+            else:
+                st.success(f"✅ Volumen OK ({pct_3d:.0f}%)")
+
+        # Alerta inteligente cruzada
+        if pct_2d >= 90 and pct_3d < 70:
+            st.error(
+                "🚨 **Alerta: techo alto no considerado correctamente.** "
+                f"El área está cubierta ({pct_2d:.0f}%) pero el volumen no ({pct_3d:.0f}%). "
+                "Este es el caso típico de 'local chico con más equipos' que buscamos resolver."
+            )
+            # Sugerir equipos adicionales
+            deficit_m3 = volumen_espacio - cob_total_m3
+            modelo_sugerido = "Advance Pro" if deficit_m3 < 900 else "Plus Pro"
+            cob_sugerida = CATALOGO[modelo_sugerido]["cobertura_m3"] * factor_total
+            equipos_extra = max(1, math.ceil(deficit_m3 / cob_sugerida))
+            st.info(f"💡 Recomendación: agregar **{equipos_extra}x {modelo_sugerido}** para cubrir el volumen.")
+
+        elif pct_3d >= 90 and pct_2d < 70:
+            st.info(
+                "ℹ️ Volumen cubierto pero área dispersa. Los equipos están muy concentrados. "
+                "Considera redistribuir para mejor cobertura en planta."
+            )
+
+        # Tabla resumen ampliada
         st.subheader("🧾 Resumen de Equipos")
-        tabla_md = "| Modelo | Cantidad | Cobertura c/u | Cobertura total |\n|---|---|---|---|\n"
+        tabla_md = "| Modelo | Cantidad | Cob. unit (m² / m³) | Cob. total (m² / m³) |\n|---|---|---|---|\n"
         for modelo, info in resumen.items():
-            tabla_md += f"| {modelo} | {info['cantidad']} | {info['cobertura_unit']:.0f} m² | {info['cobertura_total']:.0f} m² |\n"
+            tabla_md += (
+                f"| {modelo} | {info['cantidad']} | "
+                f"{info['cobertura_unit_m2']:.0f} m² / {info['cobertura_unit_m3']:.0f} m³ | "
+                f"{info['cobertura_total_m2']:.0f} m² / {info['cobertura_total_m3']:.0f} m³ |\n"
+            )
         st.markdown(tabla_md)
 
         # Sección de descarga
