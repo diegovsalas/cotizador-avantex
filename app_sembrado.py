@@ -78,6 +78,7 @@ if 'base_image' not in st.session_state: st.session_state['base_image'] = None
 if 'file_id' not in st.session_state: st.session_state['file_id'] = ""
 if 'analisis_ia' not in st.session_state: st.session_state['analisis_ia'] = ""
 if 'calibracion_clicks' not in st.session_state: st.session_state['calibracion_clicks'] = []
+if 'calibracion_ia' not in st.session_state: st.session_state['calibracion_ia'] = None
 
 # --- FUNCIÓN PROCESAR IMAGEN/PDF ---
 def process_file(uploaded_file):
@@ -117,6 +118,108 @@ def calcular_radio_px(cobertura_m2, scale_px_per_m):
     """Radio de un círculo equivalente a la cobertura en m²."""
     radio_m = math.sqrt(cobertura_m2 / math.pi)
     return int(radio_m * scale_px_per_m)
+
+
+# --- FUNCIÓN: Auto-calibración con Gemini Vision ---
+def auto_calibrar_con_ia(imagen, api_key):
+    """
+    Pide a Gemini que detecte un elemento de escala en el plano.
+    Retorna dict con puntos + medida real, o None si falla.
+
+    Prioriza cotas impresas > puertas estándar > estimación visual.
+    """
+    import json
+
+    # Reducir imagen para enviar a API (mismo criterio que análisis)
+    w, h = imagen.size
+    max_dim = 1024
+    if max(w, h) > max_dim:
+        ratio = max_dim / max(w, h)
+        img_para_api = imagen.resize((int(w * ratio), int(h * ratio)), Image.Resampling.LANCZOS)
+        escala_reduccion = ratio
+    else:
+        img_para_api = imagen
+        escala_reduccion = 1.0
+
+    prompt = """Eres un analista de planos arquitectónicos. Tu tarea: detectar la escala del plano.
+
+REGLAS ESTRICTAS:
+1. Busca PRIMERO cotas dimensionales impresas (números con líneas de dimensión, ej. "5.20", "3.00 M").
+2. Si NO hay cotas, busca una PUERTA completa (ancho estándar en México: 0.90 m).
+3. Como último recurso, estima dimensiones del espacio total basándote en elementos típicos.
+
+COORDENADAS:
+- Las coordenadas (x, y) están en pixeles.
+- El origen (0, 0) es la ESQUINA SUPERIOR IZQUIERDA.
+- x crece hacia la DERECHA, y crece hacia ABAJO.
+- Dimensiones de la imagen que analizas: ancho y alto se te indican abajo.
+
+Devuelve SOLO JSON con este formato exacto:
+{
+  "metodo_usado": "cota_impresa" | "puerta_estandar" | "estimacion_visual",
+  "confianza": "alta" | "media" | "baja",
+  "punto_1": {"x": <int>, "y": <int>},
+  "punto_2": {"x": <int>, "y": <int>},
+  "distancia_metros": <float>,
+  "descripcion": "<breve explicación de qué detectaste>"
+}
+
+Los dos puntos deben ser los EXTREMOS de lo que mediste (inicio y fin de la cota o ancho de la puerta)."""
+
+    prompt += f"\n\nDimensiones de la imagen: ancho={img_para_api.width}px, alto={img_para_api.height}px."
+
+    MODELOS = ['gemini-2.5-flash', 'gemini-2.5-flash-lite']
+
+    for modelo_id in MODELOS:
+        try:
+            genai.configure(api_key=api_key)
+            # response_mime_type fuerza respuesta JSON
+            model = genai.GenerativeModel(
+                modelo_id,
+                generation_config={"response_mime_type": "application/json"}
+            )
+            response = model.generate_content(
+                [prompt, img_para_api],
+                request_options={"timeout": 60}
+            )
+            # Parsear JSON
+            data = json.loads(response.text)
+
+            # Validar campos requeridos
+            required = ["metodo_usado", "confianza", "punto_1", "punto_2", "distancia_metros"]
+            if not all(k in data for k in required):
+                continue
+
+            # Convertir coordenadas al tamaño original si hubo reducción
+            if escala_reduccion != 1.0:
+                data["punto_1"]["x"] = int(data["punto_1"]["x"] / escala_reduccion)
+                data["punto_1"]["y"] = int(data["punto_1"]["y"] / escala_reduccion)
+                data["punto_2"]["x"] = int(data["punto_2"]["x"] / escala_reduccion)
+                data["punto_2"]["y"] = int(data["punto_2"]["y"] / escala_reduccion)
+
+            # Calcular escala px/m
+            dx = data["punto_2"]["x"] - data["punto_1"]["x"]
+            dy = data["punto_2"]["y"] - data["punto_1"]["y"]
+            dist_px = math.sqrt(dx**2 + dy**2)
+
+            if data["distancia_metros"] <= 0 or dist_px <= 0:
+                continue
+
+            data["escala_px_per_m"] = dist_px / data["distancia_metros"]
+            data["dist_px"] = dist_px
+            data["modelo_usado"] = modelo_id
+            return data
+
+        except json.JSONDecodeError:
+            continue
+        except Exception as e:
+            if "429" in str(e) or "quota" in str(e).lower():
+                continue
+            else:
+                return {"error": str(e)}
+
+    return None
+
 
 # --- FUNCIÓN GENERAR PDF ---
 def generar_pdf(imagen_base, puntos, texto_ia, escala_px, area_total, factor_espacio, resumen):
@@ -257,14 +360,62 @@ with st.sidebar:
             st.session_state['puntos'] = []
             st.rerun()
     else:
-        st.info("Clic en 2 puntos de referencia.")
+        st.subheader("🤖 Auto-calibración con IA")
+
+        if api_key and st.session_state['base_image'] is not None:
+            if st.button("✨ Detectar escala automáticamente"):
+                with st.status("🔍 Analizando plano...", expanded=True) as status:
+                    st.write("📡 Pidiendo a Gemini que detecte escala...")
+                    resultado = auto_calibrar_con_ia(
+                        st.session_state['base_image'],
+                        api_key
+                    )
+                    if resultado and "error" not in resultado:
+                        st.session_state['calibracion_ia'] = resultado
+                        st.write(f"✅ Detectado: {resultado['descripcion']}")
+                        status.update(label="✅ Escala detectada", state="complete")
+                    elif resultado and "error" in resultado:
+                        st.write(f"❌ Error: {resultado['error'][:150]}")
+                        status.update(label="❌ Falló detección", state="error")
+                    else:
+                        st.write("❌ No se pudo detectar escala en el plano")
+                        status.update(label="❌ Falló detección", state="error")
+                st.rerun()
+        elif not api_key:
+            st.caption("⚠️ Requiere API Key de Google arriba")
+
+        # Mostrar resultado de auto-calibración IA
+        if st.session_state['calibracion_ia']:
+            cal = st.session_state['calibracion_ia']
+            confianza_emoji = {"alta": "🟢", "media": "🟡", "baja": "🔴"}.get(cal['confianza'], "⚪")
+
+            with st.container(border=True):
+                st.markdown(f"**{confianza_emoji} Confianza: {cal['confianza']}**")
+                st.caption(f"Método: `{cal['metodo_usado']}`")
+                st.caption(f"📐 {cal['descripcion']}")
+                st.caption(f"📏 Distancia detectada: {cal['distancia_metros']} m = {cal['dist_px']:.0f} px")
+                st.caption(f"📊 Escala calculada: **{cal['escala_px_per_m']:.1f} px/m**")
+
+                c1, c2 = st.columns(2)
+                if c1.button("✅ Aplicar"):
+                    st.session_state['scale_px_per_meter'] = cal['escala_px_per_m']
+                    st.session_state['calibracion_ia'] = None
+                    st.rerun()
+                if c2.button("❌ Descartar"):
+                    st.session_state['calibracion_ia'] = None
+                    st.rerun()
+
+        st.divider()
+        st.subheader("📏 Calibración manual")
+        st.caption("Clic en 2 puntos de referencia conocida.")
+
         if len(st.session_state['calibracion_clicks']) == 2:
             p1 = st.session_state['calibracion_clicks'][0]
             p2 = st.session_state['calibracion_clicks'][1]
             dist_px = math.sqrt((p2['x'] - p1['x'])**2 + (p2['y'] - p1['y'])**2)
             st.write(f"📏 Pixeles: {dist_px:.1f}")
             metros = st.number_input("Metros reales:", value=0.90)
-            if st.button("✅ Aplicar Escala"):
+            if st.button("✅ Aplicar Escala Manual"):
                 if metros > 0:
                     st.session_state['scale_px_per_meter'] = dist_px / metros
                     st.session_state['calibracion_clicks'] = []
@@ -280,6 +431,7 @@ if uploaded_file:
         st.session_state['file_id'] = fid
         st.session_state['puntos'] = []
         st.session_state['calibracion_clicks'] = []
+        st.session_state['calibracion_ia'] = None
         st.session_state['analisis_ia'] = ""
         st.rerun()
 
@@ -292,7 +444,6 @@ if st.session_state['base_image']:
         with col_ia_btn:
             if st.button("✨ Analizar (Gemini)"):
                 # Cascada de modelos: intenta del más capaz al más ligero
-                # gemini-2.0-flash está DEPRECATED desde marzo 2026
                 MODELOS_CASCADA = [
                     'gemini-2.5-flash',         # 10 RPM / 500 RPD free tier
                     'gemini-2.5-flash-lite',    # 15 RPM / 1000 RPD free tier
@@ -311,41 +462,99 @@ if st.session_state['base_image']:
                 Responde en español, breve, con bullet points.
                 """
 
-                with st.spinner("Pensando..."):
-                    genai.configure(api_key=api_key)
+                # Usar st.status en vez de spinner: muestra progreso paso a paso
+                with st.status("🔍 Analizando plano con IA...", expanded=True) as status:
                     respuesta_obtenida = False
-                    ultimo_error = None
+                    errores_detalle = []
 
+                    # Paso 1: Optimizar imagen (reducir tamaño = menos tokens = más rápido)
+                    st.write("📐 Optimizando imagen para la API...")
+                    img_original = st.session_state['base_image']
+                    w, h = img_original.size
+                    st.write(f"   Tamaño original: {w}×{h} px")
+
+                    # Gemini funciona bien con imágenes de ~1024px máximo
+                    max_dim = 1024
+                    if max(w, h) > max_dim:
+                        ratio = max_dim / max(w, h)
+                        new_size = (int(w * ratio), int(h * ratio))
+                        img_para_api = img_original.resize(new_size, Image.Resampling.LANCZOS)
+                        st.write(f"   Redimensionada a: {new_size[0]}×{new_size[1]} px")
+                    else:
+                        img_para_api = img_original
+                        st.write("   No requiere redimensión")
+
+                    # Paso 2: Configurar API
+                    st.write("🔐 Configurando credenciales...")
+                    try:
+                        genai.configure(api_key=api_key)
+                        st.write("   ✅ API key aceptada")
+                    except Exception as e:
+                        st.write(f"   ❌ Error de configuración: {e}")
+                        status.update(label="❌ Falló configuración", state="error")
+                        st.stop()
+
+                    # Paso 3: Intentar cascada de modelos
                     for modelo_id in MODELOS_CASCADA:
+                        st.write(f"📡 Probando **{modelo_id}**...")
                         try:
                             model = genai.GenerativeModel(modelo_id)
+                            st.write(f"   📤 Enviando solicitud (timeout: 60s)...")
+
+                            # Llamada con timeout explícito
                             response = model.generate_content(
-                                [prompt, st.session_state['base_image']]
+                                [prompt, img_para_api],
+                                request_options={"timeout": 60}
                             )
-                            st.session_state['analisis_ia'] = response.text
-                            st.success(f"✅ Análisis generado con {modelo_id}")
-                            respuesta_obtenida = True
-                            break
-                        except Exception as e:
-                            ultimo_error = str(e)
-                            # Si es error 429 (cuota), sigue con el siguiente modelo
-                            if "429" in ultimo_error or "quota" in ultimo_error.lower():
-                                st.warning(f"⚠️ {modelo_id} sin cuota. Intentando siguiente...")
-                                continue
-                            # Si es otro error (auth, red), corta la cascada
+
+                            # Validar que la respuesta tenga contenido
+                            if response and response.text:
+                                st.session_state['analisis_ia'] = response.text
+                                st.write(f"   ✅ Respuesta recibida ({len(response.text)} caracteres)")
+                                status.update(
+                                    label=f"✅ Análisis completado con {modelo_id}",
+                                    state="complete",
+                                    expanded=False
+                                )
+                                respuesta_obtenida = True
+                                break
                             else:
+                                st.write("   ⚠️ Respuesta vacía (posible filtro de seguridad)")
+                                errores_detalle.append((modelo_id, "Respuesta vacía"))
+                                continue
+
+                        except Exception as e:
+                            error_str = str(e)
+                            errores_detalle.append((modelo_id, error_str))
+                            if "429" in error_str or "quota" in error_str.lower():
+                                st.write(f"   ⚠️ Sin cuota. Probando siguiente modelo...")
+                                continue
+                            elif "timeout" in error_str.lower() or "deadline" in error_str.lower():
+                                st.write(f"   ⏱️ Timeout — la API tardó más de 60s")
+                                continue
+                            else:
+                                st.write(f"   ❌ Error: {error_str[:200]}")
                                 break
 
-                    if respuesta_obtenida:
-                        st.rerun()
-                    else:
-                        st.error(f"❌ No se pudo generar análisis. Último error: {ultimo_error}")
-                        st.info(
-                            "💡 **Posibles causas:**\n"
-                            "- Cuotas diarias agotadas (se resetean a medianoche hora del Pacífico)\n"
-                            "- API Key inválida o sin permisos\n"
-                            "- Considera activar billing en https://ai.google.dev para Tier 1"
-                        )
+                    if not respuesta_obtenida:
+                        status.update(label="❌ Ningún modelo respondió", state="error")
+
+                # Fuera del status: mostrar resultado o error
+                if respuesta_obtenida:
+                    st.rerun()
+                else:
+                    st.error("❌ No se pudo generar el análisis.")
+                    with st.expander("🔍 Ver errores técnicos"):
+                        for modelo_id, err in errores_detalle:
+                            st.markdown(f"**{modelo_id}:**")
+                            st.code(err, language=None)
+
+                    st.info(
+                        "💡 **Pasos a probar:**\n"
+                        "1. Crear API key nueva en https://aistudio.google.com/app/apikey\n"
+                        "2. Verificar que el plano no sea demasiado complejo\n"
+                        "3. Activar Tier 1 (billing) en https://ai.google.dev"
+                    )
 
         with col_ia_txt:
             if st.session_state['analisis_ia']:
@@ -367,6 +576,20 @@ if st.session_state['base_image']:
         draw.ellipse((p['x']-5, p['y']-5, p['x']+5, p['y']+5), fill="blue")
     if len(clicks) == 2:
         draw.line([(clicks[0]['x'], clicks[0]['y']), (clicks[1]['x'], clicks[1]['y'])], fill="blue", width=3)
+
+    # Dibujar puntos detectados por IA (si hay)
+    if st.session_state['calibracion_ia']:
+        cal = st.session_state['calibracion_ia']
+        p1, p2 = cal['punto_1'], cal['punto_2']
+        # Línea magenta entre los dos puntos detectados
+        draw.line([(p1['x'], p1['y']), (p2['x'], p2['y'])], fill="magenta", width=4)
+        # Círculos en los extremos
+        for p in [p1, p2]:
+            draw.ellipse((p['x']-8, p['y']-8, p['x']+8, p['y']+8), outline="magenta", width=3, fill="white")
+        # Etiqueta con la medida
+        mid_x = (p1['x'] + p2['x']) // 2
+        mid_y = (p1['y'] + p2['y']) // 2
+        draw.text((mid_x + 10, mid_y - 10), f"{cal['distancia_metros']} m", fill="magenta")
 
     value = streamlit_image_coordinates(display_img, key="mapa_interactivo")
 
