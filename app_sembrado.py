@@ -291,34 +291,61 @@ if st.session_state['base_image']:
         col_ia_btn, col_ia_txt = st.columns([1, 3])
         with col_ia_btn:
             if st.button("✨ Analizar (Gemini)"):
-                try:
-                    with st.spinner("Pensando..."):
-                        genai.configure(api_key=api_key)
-                        try:
-                            model = genai.GenerativeModel('gemini-2.0-flash')
-                        except Exception:
-                            try:
-                                model = genai.GenerativeModel('gemini-1.5-flash')
-                            except Exception:
-                                model = genai.GenerativeModel('gemini-pro-vision')
+                # Cascada de modelos: intenta del más capaz al más ligero
+                # gemini-2.0-flash está DEPRECATED desde marzo 2026
+                MODELOS_CASCADA = [
+                    'gemini-2.5-flash',         # 10 RPM / 500 RPD free tier
+                    'gemini-2.5-flash-lite',    # 15 RPM / 1000 RPD free tier
+                ]
 
-                        prompt = f"""
-                        Eres experto en Marketing Olfativo de Aromatex.
-                        Local de {area_total} m², altura {altura}m, tipo: {tipo_espacio}.
-                        Catálogo disponible:
-                        - Home Pro (100 m²)
-                        - Advance Pro (300 m²)
-                        - Plus Pro (500 m²)
-                        - Extreme Pro (800 m²)
-                        Analiza la imagen. Recomienda qué modelo y cuántos equipos usar,
-                        y 3 zonas estratégicas para colocarlos.
-                        Responde en español, breve, con bullet points.
-                        """
-                        response = model.generate_content([prompt, st.session_state['base_image']])
-                        st.session_state['analisis_ia'] = response.text
+                prompt = f"""
+                Eres experto en Marketing Olfativo de Aromatex.
+                Local de {area_total} m², altura {altura}m, tipo: {tipo_espacio}.
+                Catálogo disponible:
+                - Home Pro (100 m²)
+                - Advance Pro (300 m²)
+                - Plus Pro (500 m²)
+                - Extreme Pro (800 m²)
+                Analiza la imagen. Recomienda qué modelo y cuántos equipos usar,
+                y 3 zonas estratégicas para colocarlos.
+                Responde en español, breve, con bullet points.
+                """
+
+                with st.spinner("Pensando..."):
+                    genai.configure(api_key=api_key)
+                    respuesta_obtenida = False
+                    ultimo_error = None
+
+                    for modelo_id in MODELOS_CASCADA:
+                        try:
+                            model = genai.GenerativeModel(modelo_id)
+                            response = model.generate_content(
+                                [prompt, st.session_state['base_image']]
+                            )
+                            st.session_state['analisis_ia'] = response.text
+                            st.success(f"✅ Análisis generado con {modelo_id}")
+                            respuesta_obtenida = True
+                            break
+                        except Exception as e:
+                            ultimo_error = str(e)
+                            # Si es error 429 (cuota), sigue con el siguiente modelo
+                            if "429" in ultimo_error or "quota" in ultimo_error.lower():
+                                st.warning(f"⚠️ {modelo_id} sin cuota. Intentando siguiente...")
+                                continue
+                            # Si es otro error (auth, red), corta la cascada
+                            else:
+                                break
+
+                    if respuesta_obtenida:
                         st.rerun()
-                except Exception as e:
-                    st.error(f"Error IA: {str(e)}")
+                    else:
+                        st.error(f"❌ No se pudo generar análisis. Último error: {ultimo_error}")
+                        st.info(
+                            "💡 **Posibles causas:**\n"
+                            "- Cuotas diarias agotadas (se resetean a medianoche hora del Pacífico)\n"
+                            "- API Key inválida o sin permisos\n"
+                            "- Considera activar billing en https://ai.google.dev para Tier 1"
+                        )
 
         with col_ia_txt:
             if st.session_state['analisis_ia']:
